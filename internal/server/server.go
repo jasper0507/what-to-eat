@@ -5,7 +5,9 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -26,6 +28,7 @@ type Config struct {
 	DatabasePath  string
 	SecureCookies bool
 	WebDir        string
+	CatalogDir    string
 }
 
 type App struct {
@@ -53,6 +56,14 @@ type credentials struct {
 	Password string `json:"password"`
 }
 
+type catalogDishResponse struct {
+	ID         string   `json:"id"`
+	Name       string   `json:"name"`
+	Category   string   `json:"category"`
+	RecipePath string   `json:"recipe_path"`
+	Tags       []string `json:"tags"`
+}
+
 func New(config Config) (*App, error) {
 	db, err := sql.Open("sqlite", config.DatabasePath)
 	if err != nil {
@@ -73,9 +84,23 @@ func New(config Config) (*App, error) {
 			account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
 			expires_at INTEGER NOT NULL
 		);
+		CREATE TABLE IF NOT EXISTS catalog_dishes (
+			id TEXT PRIMARY KEY,
+			source_path TEXT NOT NULL UNIQUE,
+			name TEXT NOT NULL,
+			category TEXT NOT NULL,
+			recipe TEXT NOT NULL,
+			tags TEXT NOT NULL
+		);
 	`); err != nil {
 		db.Close()
 		return nil, err
+	}
+	if config.CatalogDir != "" {
+		if err := importCatalog(db, config.CatalogDir); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("import Catalog: %w", err)
+		}
 	}
 
 	dummyPasswordHash, err := bcrypt.GenerateFromPassword([]byte("dummy-password"), bcrypt.DefaultCost)
@@ -105,6 +130,7 @@ func (a *App) routes() {
 	router.POST("/api/auth/register", a.register)
 	router.POST("/api/auth/login", a.login)
 	router.GET("/api/auth/session", a.session)
+	router.GET("/api/catalog/dishes", a.searchCatalog)
 	if configWebDir := a.webDir; configWebDir != "" {
 		indexPath := filepath.Join(configWebDir, "index.html")
 		router.Static("/assets", filepath.Join(configWebDir, "assets"))
@@ -285,10 +311,18 @@ func (a *App) recordLoginFailure(clientIP string, now time.Time) {
 }
 
 func (a *App) session(context *gin.Context) {
+	account, ok := a.currentAccount(context)
+	if !ok {
+		return
+	}
+	context.JSON(http.StatusOK, gin.H{"account": account})
+}
+
+func (a *App) currentAccount(context *gin.Context) (accountResponse, bool) {
 	cookie, err := context.Cookie("what2eat_session")
 	if err != nil {
 		writeError(context, http.StatusUnauthorized, "unauthorized", "需要登录")
-		return
+		return accountResponse{}, false
 	}
 
 	tokenHash := sha256.Sum256([]byte(cookie))
@@ -304,14 +338,61 @@ func (a *App) session(context *gin.Context) {
 	).Scan(&account.ID, &account.Username)
 	if errors.Is(err, sql.ErrNoRows) {
 		writeError(context, http.StatusUnauthorized, "unauthorized", "需要登录")
-		return
+		return accountResponse{}, false
 	}
 	if err != nil {
 		writeInternalError(context, "restore Account session", err)
+		return accountResponse{}, false
+	}
+
+	return account, true
+}
+
+func (a *App) searchCatalog(context *gin.Context) {
+	if _, ok := a.currentAccount(context); !ok {
+		return
+	}
+	query := strings.TrimSpace(context.Query("q"))
+	if query == "" || utf8.RuneCountInString(query) > 100 {
+		writeError(context, http.StatusBadRequest, "invalid_query", "请输入有效的 Dish 名称")
 		return
 	}
 
-	context.JSON(http.StatusOK, gin.H{"account": account})
+	rows, err := a.db.QueryContext(
+		context,
+		`SELECT id, name, category, source_path, tags
+		 FROM catalog_dishes
+		 WHERE instr(name, ?) > 0
+		 ORDER BY name
+		 LIMIT 50`,
+		query,
+	)
+	if err != nil {
+		writeInternalError(context, "search Catalog", err)
+		return
+	}
+	defer rows.Close()
+
+	dishes := make([]catalogDishResponse, 0)
+	for rows.Next() {
+		var dish catalogDishResponse
+		var tagsJSON string
+		if err := rows.Scan(&dish.ID, &dish.Name, &dish.Category, &dish.RecipePath, &tagsJSON); err != nil {
+			writeInternalError(context, "read Catalog search result", err)
+			return
+		}
+		if err := json.Unmarshal([]byte(tagsJSON), &dish.Tags); err != nil {
+			writeInternalError(context, "decode Catalog tags", err)
+			return
+		}
+		dishes = append(dishes, dish)
+	}
+	if err := rows.Err(); err != nil {
+		writeInternalError(context, "finish Catalog search", err)
+		return
+	}
+
+	context.JSON(http.StatusOK, gin.H{"dishes": dishes})
 }
 
 func newSession() (token string, tokenHash []byte, expiresAt time.Time, err error) {

@@ -21,6 +21,7 @@ func main() {
 		DatabasePath:  databasePath,
 		SecureCookies: os.Getenv("APP_ENV") == "production",
 		WebDir:        envOrDefault("WEB_DIR", "frontend/dist"),
+		CatalogDir:    os.Getenv("CATALOG_DIR"),
 	})
 	if err != nil {
 		log.Fatal(err)

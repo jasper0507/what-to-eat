@@ -18,6 +18,17 @@ npm run dev
 
 打开 `http://localhost:5173`。用户名须为 3–32 个字母、数字、下划线或连字符（支持中文），密码须至少 8 个字符且不超过 72 个 UTF-8 字节。
 
+## 导入 HowToCook Catalog
+
+服务启动时可从 HowToCook 的 `dishes` 目录重复导入 Catalog；同一路径始终得到同一 Dish 身份，已有条目会更新名称、Recipe 和分类信息。
+
+```bash
+git clone https://github.com/Anduin2017/HowToCook.git
+CATALOG_DIR=/path/to/HowToCook/dishes go run ./cmd/server
+```
+
+再次使用相同 `CATALOG_DIR` 启动即可安全重跑导入。未设置时服务使用数据库中已有的 Catalog。
+
 ## 单节点运行
 
 ```bash

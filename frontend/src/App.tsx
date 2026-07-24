@@ -3,11 +3,14 @@ import {
   Alert,
   Button,
   Card,
+  Empty,
   Form,
   Input,
+  List,
   Segmented,
   Space,
   Spin,
+  Tag,
   Typography,
 } from "antd";
 import { Navigate, Route, Routes } from "react-router-dom";
@@ -27,7 +30,19 @@ type ErrorResponse = {
   };
 };
 
-async function requestAccount(path: string, init?: RequestInit): Promise<Account> {
+type Dish = {
+  id: string;
+  name: string;
+  category: string;
+  recipe_path: string;
+  tags: string[];
+};
+
+type CatalogResponse = {
+  dishes: Dish[];
+};
+
+async function requestJSON<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     ...init,
     headers: {
@@ -35,12 +50,16 @@ async function requestAccount(path: string, init?: RequestInit): Promise<Account
       ...init?.headers,
     },
   });
-  const body = (await response.json()) as AccountResponse | ErrorResponse;
+  const body = (await response.json()) as T | ErrorResponse;
   if (!response.ok) {
     const error = body as ErrorResponse;
     throw new Error(error.error?.message ?? "服务暂时不可用，请稍后重试");
   }
-  return (body as AccountResponse).account;
+  return body as T;
+}
+
+async function requestAccount(path: string, init?: RequestInit): Promise<Account> {
+  return (await requestJSON<AccountResponse>(path, init)).account;
 }
 
 function AuthPage({ onAuthenticated }: { onAuthenticated: (account: Account) => void }) {
@@ -150,16 +169,99 @@ function AuthPage({ onAuthenticated }: { onAuthenticated: (account: Account) => 
   );
 }
 
-function AccountHome({ account }: { account: Account }) {
+function CatalogPage({ account }: { account: Account }) {
+  const [dishes, setDishes] = useState<Dish[]>([]);
+  const [searched, setSearched] = useState(false);
+  const [searching, setSearching] = useState(false);
+  const [error, setError] = useState<string>();
+
+  async function search(value: string) {
+    const query = value.trim();
+    setError(undefined);
+    if (!query) {
+      setDishes([]);
+      setSearched(false);
+      setError("请输入要搜索的 Dish 名称");
+      return;
+    }
+
+    setSearching(true);
+    try {
+      const result = await requestJSON<CatalogResponse>(
+        `/api/catalog/dishes?q=${encodeURIComponent(query)}`,
+      );
+      setDishes(result.dishes);
+      setSearched(true);
+    } catch (cause) {
+      setDishes([]);
+      setSearched(false);
+      setError(cause instanceof Error ? cause.message : "Catalog 搜索失败，请稍后重试");
+    } finally {
+      setSearching(false);
+    }
+  }
+
   return (
-    <main className="auth-shell">
-      <Card className="auth-card" bordered={false}>
-        <Space direction="vertical" size={16}>
-          <Typography.Text type="secondary">Account 会话已恢复</Typography.Text>
-          <Typography.Title level={1}>你好，{account.username}</Typography.Title>
-          <Typography.Paragraph>
-            你的 Account 已安全连接。下一张工单会从这里继续建立候选池和每日 Decision。
-          </Typography.Paragraph>
+    <main className="catalog-shell">
+      <Card className="catalog-card" bordered={false}>
+        <Space direction="vertical" size={24} className="full-width">
+          <header className="catalog-header">
+            <div>
+              <Typography.Text type="secondary">你好，{account.username}</Typography.Text>
+              <Typography.Title level={1}>搜索想吃的 Dish</Typography.Title>
+              <Typography.Paragraph type="secondary">
+                从 HowToCook Catalog 中按名称查找，结果保留来源分类和稳定身份。
+              </Typography.Paragraph>
+            </div>
+          </header>
+
+          <Input.Search
+            aria-label="按名称搜索 Dish"
+            allowClear
+            enterButton="搜索"
+            loading={searching}
+            maxLength={100}
+            placeholder="例如：番茄、炒蛋、牛腩"
+            size="large"
+            onSearch={search}
+          />
+
+          {error && <Alert type="error" showIcon message={error} />}
+
+          {!searched && !error && (
+            <Typography.Text type="secondary">输入名称后，Catalog 只会返回已有 Dish。</Typography.Text>
+          )}
+
+          {searched && dishes.length === 0 && (
+            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Catalog 中没有匹配的 Dish" />
+          )}
+
+          {dishes.length > 0 && (
+            <List
+              aria-label="Catalog 搜索结果"
+              dataSource={dishes}
+              renderItem={(dish) => (
+                <List.Item key={dish.id}>
+                  <List.Item.Meta
+                    title={
+                      <Space size={8} wrap>
+                        <Typography.Text strong>{dish.name}</Typography.Text>
+                        <Tag color="orange">{dish.category}</Tag>
+                        {dish.tags.map((tag) => (
+                          <Tag key={tag}>{tag}</Tag>
+                        ))}
+                      </Space>
+                    }
+                    description={
+                      <Typography.Text type="secondary" className="recipe-path">
+                        {dish.recipe_path}
+                      </Typography.Text>
+                    }
+                  />
+                </List.Item>
+              )}
+            />
+          )}
         </Space>
       </Card>
     </main>
@@ -219,7 +321,7 @@ export function WhatToEatApp() {
       />
       <Route
         path="*"
-        element={account ? <AccountHome account={account} /> : <Navigate to="/login" replace />}
+        element={account ? <CatalogPage account={account} /> : <Navigate to="/login" replace />}
       />
     </Routes>
   );

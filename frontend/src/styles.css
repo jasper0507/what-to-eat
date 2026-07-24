@@ -20,6 +20,7 @@ body {
 }
 
 .auth-shell,
+.catalog-shell,
 .centered-state {
   display: grid;
   min-height: 100vh;
@@ -32,10 +33,29 @@ body {
   box-shadow: 0 24px 70px rgb(105 58 30 / 14%);
 }
 
+.catalog-card {
+  width: min(100%, 760px);
+  box-shadow: 0 24px 70px rgb(105 58 30 / 14%);
+}
+
 .auth-card h1 {
   margin-block: 0 8px;
   font-size: clamp(2rem, 8vw, 3rem);
   line-height: 1.08;
+}
+
+.catalog-header h1 {
+  margin-block: 8px;
+  font-size: clamp(2rem, 6vw, 3rem);
+  line-height: 1.08;
+}
+
+.catalog-header p {
+  margin-bottom: 0;
+}
+
+.recipe-path {
+  overflow-wrap: anywhere;
 }
 
 .full-width {
@@ -50,6 +70,7 @@ body {
 
 @media (max-width: 560px) {
   .auth-shell,
+  .catalog-shell,
   .centered-state {
     align-items: start;
     padding: 20px 16px;
@@ -57,5 +78,9 @@ body {
 
   .auth-card {
     margin-top: 7vh;
+  }
+
+  .catalog-card {
+    margin-top: 2vh;
   }
 }
