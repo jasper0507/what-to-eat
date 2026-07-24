@@ -22,6 +22,12 @@ func main() {
 		SecureCookies: os.Getenv("APP_ENV") == "production",
 		WebDir:        envOrDefault("WEB_DIR", "frontend/dist"),
 		CatalogDir:    os.Getenv("CATALOG_DIR"),
+		NIM: &server.NIMConfig{
+			APIKey:  os.Getenv("NVIDIA_API_KEY"),
+			BaseURL: envOrDefault("NIM_BASE_URL", "https://integrate.api.nvidia.com/v1"),
+			Model:   envOrDefault("NIM_MODEL", "meta/llama-3.1-8b-instruct"),
+			Timeout: 10 * time.Second,
+		},
 	})
 	if err != nil {
 		log.Fatal(err)

@@ -8,7 +8,7 @@ test("Eater can Reroll and accept the replacement Decision", async ({
   await page.getByLabel("用户名").fill(`reroll_${testInfo.project.name}`);
   await page.getByLabel("密码").fill("browser-pass-1");
   await page.getByRole("button", { name: "创建 Account" }).click();
-  await expect(page.getByText("Candidate pool 为空")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "先聊聊你爱吃什么" })).toBeVisible();
 
   for (const dish of [
     "vegetable_dish/番茄炒蛋.md",
@@ -20,7 +20,7 @@ test("Eater can Reroll and accept the replacement Decision", async ({
     expect(response.ok()).toBe(true);
   }
 
-  await page.reload();
+  await page.goto("/");
   await page.getByRole("button", { name: "开始这一顿" }).click();
 
   const decisionHeading = page.getByRole("heading", { level: 2 });

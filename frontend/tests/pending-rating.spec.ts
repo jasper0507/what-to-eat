@@ -8,7 +8,7 @@ test("Discovery recipe handoff leads to labeled Pending rating before the next D
   await page.getByLabel("用户名").fill(`pending_${testInfo.project.name}`);
   await page.getByLabel("密码").fill("browser-pass-1");
   await page.getByRole("button", { name: "创建 Account" }).click();
-  await expect(page.getByText("Candidate pool 为空", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "先聊聊你爱吃什么" })).toBeVisible();
 
   const addResponse = await page.request.post("/api/candidate-pool/dishes", {
     data: {
@@ -18,7 +18,7 @@ test("Discovery recipe handoff leads to labeled Pending rating before the next D
   });
   expect(addResponse.ok()).toBe(true);
 
-  await page.reload();
+  await page.goto("/");
   await page.getByRole("button", { name: "开始这一顿" }).click();
   await expect(page.getByText("Discovery · 候选池外探索", { exact: true })).toBeVisible();
   const discoveryName = await page.getByRole("heading", { level: 2 }).textContent();

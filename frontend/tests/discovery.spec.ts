@@ -8,7 +8,7 @@ test("Discovery stays explicit and respects similarity, Reroll penalty, and Meal
   await page.getByLabel("用户名").fill(`discovery_${testInfo.project.name}`);
   await page.getByLabel("密码").fill("browser-pass-1");
   await page.getByRole("button", { name: "创建 Account" }).click();
-  await expect(page.getByText("Candidate pool 为空")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "先聊聊你爱吃什么" })).toBeVisible();
 
   const poolDish = "vegetable_dish/番茄炒蛋.md";
   const addResponse = await page.request.post("/api/candidate-pool/dishes", {
@@ -16,7 +16,7 @@ test("Discovery stays explicit and respects similarity, Reroll penalty, and Meal
   });
   expect(addResponse.ok()).toBe(true);
 
-  await page.reload();
+  await page.goto("/");
   await page.getByRole("button", { name: "开始这一顿" }).click();
 
   const discoveryLabel = page.getByText("Discovery · 候选池外探索", {

@@ -18,6 +18,17 @@ npm run dev
 
 打开 `http://localhost:5173`。用户名须为 3–32 个字母、数字、下划线或连字符（支持中文），密码须至少 8 个字符且不超过 72 个 UTF-8 字节。
 
+## NVIDIA NIM Onboarding
+
+Onboarding interview 只由 Go 服务调用 NVIDIA NIM；API key 不会进入前端构建。启动 API 前设置：
+
+```bash
+export NVIDIA_API_KEY="..."
+go run ./cmd/server
+```
+
+默认使用 `https://integrate.api.nvidia.com/v1` 和 `meta/llama-3.1-8b-instruct`。自托管 NIM 可通过 `NIM_BASE_URL` 和 `NIM_MODEL` 覆盖。未配置或 NIM 暂时失败时，访谈页面允许重试，或转到手工 Catalog 搜索与 Candidate pool 编辑。
+
 ## 导入 HowToCook Catalog
 
 服务启动时可从 HowToCook 的 `dishes` 目录重复导入 Catalog；同一路径始终得到同一 Dish 身份，已有条目会更新名称、Recipe 和分类信息。

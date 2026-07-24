@@ -30,6 +30,7 @@ type Config struct {
 	WebDir        string
 	CatalogDir    string
 	Discovery     *DiscoveryConfig
+	NIM           *NIMConfig
 }
 
 type App struct {
@@ -40,6 +41,7 @@ type App struct {
 	loginFailures     map[string]loginFailureWindow
 	loginFailuresMu   sync.Mutex
 	mealLifecycle     *mealLifecycle
+	onboarding        *onboardingInterview
 }
 
 type loginFailureWindow struct {
@@ -66,10 +68,18 @@ type catalogDishResponse struct {
 }
 
 func New(config Config) (*App, error) {
-	return newApp(config, newDecisionRandom())
+	nim, err := newNIMAdapter(config.NIM)
+	if err != nil {
+		return nil, fmt.Errorf("configure NVIDIA NIM: %w", err)
+	}
+	return newApp(config, newDecisionRandom(), nim)
 }
 
-func newApp(config Config, decisionRandom *mathrand.Rand) (*App, error) {
+func newApp(
+	config Config,
+	decisionRandom *mathrand.Rand,
+	nim onboardingNIM,
+) (*App, error) {
 	discovery, err := normalizeDiscoveryConfig(config.Discovery)
 	if err != nil {
 		return nil, fmt.Errorf("configure Discovery: %w", err)
@@ -106,6 +116,23 @@ func newApp(config Config, decisionRandom *mathrand.Rand) (*App, error) {
 			),
 			PRIMARY KEY (account_id, dish_id)
 		);
+		CREATE TABLE IF NOT EXISTS onboarding_interviews (
+			account_id INTEGER PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
+			status TEXT NOT NULL CHECK (
+				status IN ('in_progress', 'failed', 'completed', 'manual')
+			),
+			attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
+			updated_at INTEGER NOT NULL
+		);
+		CREATE TABLE IF NOT EXISTS onboarding_messages (
+			id INTEGER PRIMARY KEY,
+			account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+			role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
+			content TEXT NOT NULL,
+			created_at INTEGER NOT NULL
+		);
+		CREATE INDEX IF NOT EXISTS onboarding_messages_by_account
+			ON onboarding_messages(account_id, id);
 		CREATE TABLE IF NOT EXISTS meals (
 			id INTEGER PRIMARY KEY,
 			account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
@@ -173,6 +200,7 @@ func newApp(config Config, decisionRandom *mathrand.Rand) (*App, error) {
 		dummyPasswordHash: dummyPasswordHash,
 		loginFailures:     make(map[string]loginFailureWindow),
 		mealLifecycle:     newMealLifecycle(db, decisionRandom, discovery),
+		onboarding:        newOnboardingInterview(db, nim),
 	}
 	app.routes(config.WebDir)
 	return app, nil
@@ -194,6 +222,10 @@ func (a *App) routes(webDir string) {
 	router.POST("/api/candidate-pool/dishes", a.addCandidatePoolDish)
 	router.PATCH("/api/candidate-pool/dishes", a.updateCandidatePoolDish)
 	router.DELETE("/api/candidate-pool/dishes", a.removeCandidatePoolDish)
+	router.GET("/api/onboarding/interview", a.getOnboardingInterview)
+	router.POST("/api/onboarding/interview/messages", a.sendOnboardingMessage)
+	router.POST("/api/onboarding/interview/retry", a.retryOnboardingInterview)
+	router.POST("/api/onboarding/interview/manual", a.useManualOnboarding)
 	router.GET("/api/meals/resume", a.resumeMeal)
 	router.POST("/api/meals", a.beginMeal)
 	router.POST("/api/decisions/:decisionID/reroll", a.rerollDecision)

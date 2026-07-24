@@ -50,6 +50,17 @@ type CandidateDish = Dish & {
   preference_weight: number;
 };
 
+type OnboardingMessage = {
+  role: "user" | "assistant";
+  content: string;
+};
+
+type OnboardingState = {
+  status: "not_started" | "in_progress" | "failed" | "completed" | "manual";
+  messages: OnboardingMessage[];
+  can_retry: boolean;
+};
+
 type MealDecision = {
   id: number;
   meal_id: number;
@@ -207,6 +218,231 @@ function AuthPage({ onAuthenticated }: { onAuthenticated: (account: Account) => 
               {mode === "login" ? "登录" : "创建 Account"}
             </Button>
           </Form>
+        </Space>
+      </Card>
+    </main>
+  );
+}
+
+function OnboardingEntry({ account }: { account: Account }) {
+  const [state, setState] = useState<OnboardingState>();
+  const [error, setError] = useState<string>();
+
+  useEffect(() => {
+    requestJSON<OnboardingState>("/api/onboarding/interview")
+      .then(setState)
+      .catch((cause) => {
+        setError(cause instanceof Error ? cause.message : "无法恢复 Onboarding interview");
+      });
+  }, []);
+
+  if (error) {
+    return (
+      <main className="centered-state">
+        <Alert
+          type="error"
+          showIcon
+          message={error}
+          action={<Button onClick={() => window.location.reload()}>重试</Button>}
+        />
+      </main>
+    );
+  }
+  if (!state) {
+    return (
+      <main className="centered-state" aria-label="正在恢复 Onboarding interview">
+        <Spin size="large" />
+      </main>
+    );
+  }
+  if (
+    state.status === "not_started" ||
+    state.status === "in_progress" ||
+    state.status === "failed"
+  ) {
+    return <Navigate to="/onboarding" replace />;
+  }
+  return <HomePage account={account} />;
+}
+
+function OnboardingPage({ account }: { account: Account }) {
+  const [state, setState] = useState<OnboardingState>();
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState<string>();
+  const [busy, setBusy] = useState<"send" | "retry" | "manual">();
+  const navigate = useNavigate();
+
+  async function loadState(clearError = true) {
+    try {
+      setState(await requestJSON<OnboardingState>("/api/onboarding/interview"));
+      if (clearError) {
+        setError(undefined);
+      }
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "无法恢复 Onboarding interview");
+    }
+  }
+
+  useEffect(() => {
+    void loadState();
+  }, []);
+
+  async function sendMessage() {
+    const content = message.trim();
+    if (!content) {
+      return;
+    }
+    setBusy("send");
+    setError(undefined);
+    try {
+      setState(
+        await requestJSON<OnboardingState>("/api/onboarding/interview/messages", {
+          method: "POST",
+          body: JSON.stringify({ message: content }),
+        }),
+      );
+      setMessage("");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "无法发送访谈消息");
+      await loadState(false);
+    } finally {
+      setBusy(undefined);
+    }
+  }
+
+  async function retry() {
+    setBusy("retry");
+    setError(undefined);
+    try {
+      setState(
+        await requestJSON<OnboardingState>("/api/onboarding/interview/retry", {
+          method: "POST",
+        }),
+      );
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "无法重试访谈消息");
+      await loadState(false);
+    } finally {
+      setBusy(undefined);
+    }
+  }
+
+  async function useManualPool() {
+    setBusy("manual");
+    setError(undefined);
+    try {
+      await requestJSON<OnboardingState>("/api/onboarding/interview/manual", {
+        method: "POST",
+      });
+      navigate("/candidate-pool", { replace: true });
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "无法切换到手工 Catalog 编辑");
+      setBusy(undefined);
+    }
+  }
+
+  if (state?.status === "completed" || state?.status === "manual") {
+    return <Navigate to="/candidate-pool" replace />;
+  }
+
+  return (
+    <main className="page-shell">
+      <Card className="page-card onboarding-card" bordered={false}>
+        <Space direction="vertical" size={24} className="full-width">
+          <header className="page-header">
+            <Typography.Text type="secondary">你好，{account.username}</Typography.Text>
+            <Typography.Title level={1}>先聊聊你爱吃什么</Typography.Title>
+            <Typography.Paragraph type="secondary">
+              说具体 Dish 名称和喜欢程度；NIM 只在服务端参与这次访谈。
+            </Typography.Paragraph>
+          </header>
+
+          {!state && !error && (
+            <div className="inline-loading" aria-label="正在恢复 Onboarding interview">
+              <Spin />
+            </div>
+          )}
+          {error && <Alert type="error" showIcon message={error} />}
+
+          {state && (
+            <>
+              <List
+                className="interview-messages"
+                aria-label="Onboarding interview 对话"
+                dataSource={
+                  state.messages.length > 0
+                    ? state.messages
+                    : [
+                        {
+                          role: "assistant" as const,
+                          content: "先说一两道你平时真会想吃的具体菜名吧。",
+                        },
+                      ]
+                }
+                renderItem={(item, index) => (
+                  <List.Item key={`${item.role}-${index}`}>
+                    <article className={`interview-message ${item.role}`}>
+                      <Typography.Text strong>
+                        {item.role === "user" ? "你" : "访谈助手"}
+                      </Typography.Text>
+                      <Typography.Paragraph>{item.content}</Typography.Paragraph>
+                    </article>
+                  </List.Item>
+                )}
+              />
+
+              <Input.TextArea
+                aria-label="告诉访谈助手你喜欢的 Dish"
+                autoSize={{ minRows: 3, maxRows: 6 }}
+                disabled={busy !== undefined || state.can_retry}
+                maxLength={600}
+                placeholder="例如：我很喜欢番茄炒蛋，牛腩也常吃，但没那么偏爱"
+                value={message}
+                onChange={(event) => setMessage(event.target.value)}
+              />
+
+              {state.can_retry ? (
+                <Button
+                  block
+                  type="primary"
+                  size="large"
+                  loading={busy === "retry"}
+                  disabled={busy !== undefined && busy !== "retry"}
+                  onClick={() => {
+                    void retry();
+                  }}
+                >
+                  重试上一条
+                </Button>
+              ) : (
+                <Button
+                  block
+                  type="primary"
+                  size="large"
+                  autoInsertSpace={false}
+                  loading={busy === "send"}
+                  disabled={!message.trim() || busy !== undefined}
+                  onClick={() => {
+                    void sendMessage();
+                  }}
+                >
+                  发送
+                </Button>
+              )}
+
+              <Button
+                block
+                size="large"
+                loading={busy === "manual"}
+                disabled={busy !== undefined && busy !== "manual"}
+                onClick={() => {
+                  void useManualPool();
+                }}
+              >
+                改用手工 Catalog 编辑
+              </Button>
+            </>
+          )}
         </Space>
       </Card>
     </main>
@@ -845,6 +1081,12 @@ export function WhatToEatApp() {
         }
       />
       <Route
+        path="/onboarding"
+        element={
+          account ? <OnboardingPage account={account} /> : <Navigate to="/login" replace />
+        }
+      />
+      <Route
         path="/candidate-pool"
         element={
           account ? <CandidatePoolPage account={account} /> : <Navigate to="/login" replace />
@@ -858,7 +1100,9 @@ export function WhatToEatApp() {
       />
       <Route
         path="*"
-        element={account ? <HomePage account={account} /> : <Navigate to="/login" replace />}
+        element={
+          account ? <OnboardingEntry account={account} /> : <Navigate to="/login" replace />
+        }
       />
     </Routes>
   );
