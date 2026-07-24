@@ -23,22 +23,25 @@ type pendingRating struct {
 type tasteRatingResult struct {
 	PendingRatingID  int64         `json:"pending_rating_id"`
 	Rating           int           `json:"rating"`
-	Label            string        `json:"label"`
 	Outcome          string        `json:"outcome"`
 	PreferenceWeight *float64      `json:"preference_weight"`
 	Dish             candidateDish `json:"dish"`
 }
 
-func TestDiscoveryAcceptanceReturnsRecipeAndBlocksBeginWithPendingRating(t *testing.T) {
-	app := openCatalogAppWithDiscovery(t, server.DiscoveryConfig{
+func pendingRatingDiscoveryConfig(maxDiscoveriesPerMeal int) server.DiscoveryConfig {
+	return server.DiscoveryConfig{
 		Enabled:               true,
 		MaxPoolSize:           1,
 		MaxEligibleDishes:     1,
 		MinRerolls:            2,
 		RequiredSignals:       2,
 		RecentMealWindow:      3,
-		MaxDiscoveriesPerMeal: 2,
-	}, 1)
+		MaxDiscoveriesPerMeal: maxDiscoveriesPerMeal,
+	}
+}
+
+func TestDiscoveryAcceptanceReturnsRecipeAndBlocksBeginWithPendingRating(t *testing.T) {
+	app := openCatalogAppWithDiscovery(t, pendingRatingDiscoveryConfig(2), 1)
 	t.Cleanup(func() { app.Close() })
 	cookie := registerCandidateEater(t, app, "pending_acceptance_eater")
 	addCandidatePoolDish(t, app, cookie, "vegetable_dish/番茄炒蛋.md", 5)
@@ -119,25 +122,16 @@ func TestDiscoveryAcceptanceReturnsRecipeAndBlocksBeginWithPendingRating(t *test
 }
 
 func TestTasteRatingsThreeToFiveAdmitDishWithOrderedPreferenceWeights(t *testing.T) {
-	app := openCatalogAppWithDiscovery(t, server.DiscoveryConfig{
-		Enabled:               true,
-		MaxPoolSize:           1,
-		MaxEligibleDishes:     1,
-		MinRerolls:            2,
-		RequiredSignals:       2,
-		RecentMealWindow:      3,
-		MaxDiscoveriesPerMeal: 2,
-	}, 2)
+	app := openCatalogAppWithDiscovery(t, pendingRatingDiscoveryConfig(2), 2)
 	t.Cleanup(func() { app.Close() })
 
 	for _, fixture := range []struct {
 		rating int
-		label  string
 		weight float64
 	}{
-		{rating: 3, label: "人上人", weight: 0.7},
-		{rating: 4, label: "顶级", weight: 1.0},
-		{rating: 5, label: "夯", weight: 1.3},
+		{rating: 3, weight: 0.7},
+		{rating: 4, weight: 1.0},
+		{rating: 5, weight: 1.3},
 	} {
 		t.Run(strconv.Itoa(fixture.rating), func(t *testing.T) {
 			cookie := registerCandidateEater(
@@ -155,12 +149,11 @@ func TestTasteRatingsThreeToFiveAdmitDishWithOrderedPreferenceWeights(t *testing
 			rated := ratePending(t, app, cookie, accepted.PendingRating.ID, fixture.rating)
 			if rated.PendingRatingID != accepted.PendingRating.ID ||
 				rated.Rating != fixture.rating ||
-				rated.Label != fixture.label ||
 				rated.Outcome != "pool_admission" ||
 				rated.PreferenceWeight == nil ||
 				*rated.PreferenceWeight != fixture.weight ||
 				rated.Dish.ID != decision.Dish.ID {
-				t.Errorf("Taste rating result = %#v, want %s Pool admission at %.1f", rated, fixture.label, fixture.weight)
+				t.Errorf("Taste rating result = %#v, want Pool admission at %.1f", rated, fixture.weight)
 			}
 
 			list := candidatePoolRequest(
@@ -207,15 +200,7 @@ func TestTasteRatingsThreeToFiveAdmitDishWithOrderedPreferenceWeights(t *testing
 }
 
 func TestLowTasteRatingIsAccountScopedIdempotentAndDurablyRejectsDish(t *testing.T) {
-	app := openCatalogAppWithDiscovery(t, server.DiscoveryConfig{
-		Enabled:               true,
-		MaxPoolSize:           1,
-		MaxEligibleDishes:     1,
-		MinRerolls:            2,
-		RequiredSignals:       2,
-		RecentMealWindow:      3,
-		MaxDiscoveriesPerMeal: 3,
-	}, 4)
+	app := openCatalogAppWithDiscovery(t, pendingRatingDiscoveryConfig(3), 4)
 	t.Cleanup(func() { app.Close() })
 	ownerCookie := registerCandidateEater(t, app, "rating_rejection_owner")
 	otherCookie := registerCandidateEater(t, app, "rating_rejection_other")
@@ -277,8 +262,7 @@ func TestLowTasteRatingIsAccountScopedIdempotentAndDurablyRejectsDish(t *testing
 	if !reflect.DeepEqual(second, first) {
 		t.Errorf("repeated Taste rating = %#v, want original result %#v", second, first)
 	}
-	if first.Label != "NPC" ||
-		first.Outcome != "rejection_mark" ||
+	if first.Outcome != "rejection_mark" ||
 		first.PreferenceWeight != nil ||
 		first.Dish.ID != discovery.Dish.ID {
 		t.Errorf("Taste rating result = %#v, want NPC Rejection mark", first)
@@ -354,7 +338,7 @@ func TestLowTasteRatingIsAccountScopedIdempotentAndDurablyRejectsDish(t *testing
 	}
 }
 
-func TestHistoricalDiscoveryAcceptancesResumeAsMultiplePendingRatings(t *testing.T) {
+func TestResumeRequiresEachOfMultiplePendingRatings(t *testing.T) {
 	databasePath := filepath.Join(t.TempDir(), "what-to-eat.db")
 	config := server.Config{
 		DatabasePath: databasePath,
@@ -364,7 +348,7 @@ func TestHistoricalDiscoveryAcceptancesResumeAsMultiplePendingRatings(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	cookie := registerCandidateEater(t, app, "historical_pending_eater")
+	cookie := registerCandidateEater(t, app, "multiple_pending_eater")
 	addCandidatePoolDish(t, app, cookie, "vegetable_dish/番茄炒蛋.md", 5)
 	if err := app.Close(); err != nil {
 		t.Fatal(err)
@@ -377,7 +361,7 @@ func TestHistoricalDiscoveryAcceptancesResumeAsMultiplePendingRatings(t *testing
 	var accountID int64
 	if err := db.QueryRow(
 		"SELECT id FROM accounts WHERE username_key = ?",
-		"historical_pending_eater",
+		"multiple_pending_eater",
 	).Scan(&accountID); err != nil {
 		t.Fatal(err)
 	}
@@ -394,7 +378,14 @@ func TestHistoricalDiscoveryAcceptancesResumeAsMultiplePendingRatings(t *testing
 			account_id, sequence, meal_id, decision_id, dish_id, accepted_at
 		 ) VALUES
 			(?, 1, 101, 201, 'vegetable_dish/番茄豆腐.md', 1710000110),
-			(?, 2, 102, 202, 'vegetable_dish/番茄土豆.md', 1710000210);`,
+			(?, 2, 102, 202, 'vegetable_dish/番茄土豆.md', 1710000210);
+		 INSERT INTO pending_ratings (
+			account_id, meal_id, decision_id, dish_id, meal_at
+		 ) VALUES
+			(?, 101, 201, 'vegetable_dish/番茄豆腐.md', 1710000110),
+			(?, 102, 202, 'vegetable_dish/番茄土豆.md', 1710000210);`,
+		accountID,
+		accountID,
 		accountID,
 		accountID,
 		accountID,
@@ -426,7 +417,7 @@ func TestHistoricalDiscoveryAcceptancesResumeAsMultiplePendingRatings(t *testing
 		state.PendingRatings[0].MealAt != 1710000110 ||
 		state.PendingRatings[1].Dish.Name != "番茄土豆" ||
 		state.PendingRatings[1].MealAt != 1710000210 {
-		t.Fatalf("Resume = %#v, want two historical Pending ratings in Meal order", state)
+		t.Fatalf("Resume = %#v, want two Pending ratings in Meal order", state)
 	}
 
 	ratePending(t, app, cookie, state.PendingRatings[0].ID, 3)

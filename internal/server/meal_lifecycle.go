@@ -162,7 +162,6 @@ type pendingRatingResponse struct {
 type tasteRatingResponse struct {
 	PendingRatingID  int64               `json:"pending_rating_id"`
 	Rating           int                 `json:"rating"`
-	Label            string              `json:"label"`
 	Outcome          string              `json:"outcome"`
 	PreferenceWeight *float64            `json:"preference_weight,omitempty"`
 	Dish             catalogDishResponse `json:"dish"`
@@ -1048,13 +1047,21 @@ func (m *mealLifecycle) Rate(
 	}
 
 	if weight, admitted := preferenceWeightForTasteRating(rating); admitted {
-		if _, err := transaction.ExecContext(
+		var rejected bool
+		if err := transaction.QueryRowContext(
 			context,
-			"DELETE FROM rejection_marks WHERE account_id = ? AND dish_id = ?",
+			`SELECT EXISTS(
+				SELECT 1
+				FROM rejection_marks
+				WHERE account_id = ? AND dish_id = ?
+			 )`,
 			accountID,
 			dishID,
-		); err != nil {
+		).Scan(&rejected); err != nil {
 			return tasteRatingResponse{}, err
+		}
+		if rejected {
+			return tasteRatingResponse{}, errTasteRatingConflict
 		}
 		if _, err := transaction.ExecContext(
 			context,
@@ -1115,7 +1122,6 @@ func newTasteRatingResponse(
 	result := tasteRatingResponse{
 		PendingRatingID: pendingRatingID,
 		Rating:          rating,
-		Label:           [...]string{"", "拉完了", "NPC", "人上人", "顶级", "夯"}[rating],
 		Outcome:         "rejection_mark",
 		Dish:            catalogDish(dishID, dishName),
 	}
@@ -1253,7 +1259,7 @@ func (a *App) ratePendingRating(context *gin.Context) {
 	case errors.Is(err, errPendingRatingNotFound):
 		writeError(context, http.StatusNotFound, "pending_rating_not_found", "Pending rating 不存在")
 	case errors.Is(err, errTasteRatingConflict):
-		writeError(context, http.StatusConflict, "rating_conflict", "Pending rating 已用其他 Taste rating 解决")
+		writeError(context, http.StatusConflict, "rating_conflict", "Taste rating 与已有结果冲突")
 	case err != nil:
 		writeInternalError(context, "resolve Pending rating", err)
 	default:
@@ -1406,6 +1412,9 @@ func migratePendingRatingSchema(db *sql.DB) error {
 		CREATE INDEX IF NOT EXISTS pending_ratings_account_unresolved
 			ON pending_ratings(account_id, meal_at, id)
 			WHERE rating IS NULL;
+		CREATE UNIQUE INDEX IF NOT EXISTS pending_ratings_account_dish_unresolved
+			ON pending_ratings(account_id, dish_id)
+			WHERE rating IS NULL;
 		CREATE TABLE IF NOT EXISTS rejection_marks (
 			account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
 			dish_id TEXT NOT NULL REFERENCES catalog_dishes(source_path) ON DELETE CASCADE,
@@ -1413,21 +1422,6 @@ func migratePendingRatingSchema(db *sql.DB) error {
 			created_at INTEGER NOT NULL,
 			PRIMARY KEY (account_id, dish_id)
 		);
-		INSERT INTO pending_ratings (
-			account_id, meal_id, decision_id, dish_id, meal_at
-		)
-		SELECT eating_records.account_id, meals.id, decisions.id,
-		       decisions.dish_id, eating_records.accepted_at
-		FROM decisions
-		JOIN meals ON meals.id = decisions.meal_id
-		JOIN eating_records ON eating_records.decision_id = decisions.id
-		WHERE decisions.mode = 'discovery'
-		  AND decisions.status = 'accepted'
-		  AND NOT EXISTS (
-			SELECT 1
-			FROM pending_ratings
-			WHERE pending_ratings.decision_id = decisions.id
-		  );
 	`); err != nil {
 		return err
 	}
