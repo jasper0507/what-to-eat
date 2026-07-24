@@ -13,14 +13,29 @@ import (
 )
 
 func openCatalogApp(t *testing.T, databasePath string) *server.App {
+	return openCatalogAppWithDecisionSeed(t, databasePath, nil)
+}
+
+func openCatalogAppWithDecisionSeed(
+	t *testing.T,
+	databasePath string,
+	seed *int64,
+) *server.App {
 	t.Helper()
 	if databasePath == "" {
 		databasePath = filepath.Join(t.TempDir(), "what-to-eat.db")
 	}
-	app, err := server.New(server.Config{
+	config := server.Config{
 		DatabasePath: databasePath,
 		CatalogDir:   filepath.Join("testdata", "catalog"),
-	})
+	}
+	var app *server.App
+	var err error
+	if seed == nil {
+		app, err = server.New(config)
+	} else {
+		app, err = server.NewWithDecisionRandomSeedForTest(config, *seed)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}

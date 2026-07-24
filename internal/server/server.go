@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	mathrand "math/rand"
 	"net"
 	"net/http"
 	"path/filepath"
@@ -64,6 +65,10 @@ type catalogDishResponse struct {
 }
 
 func New(config Config) (*App, error) {
+	return newApp(config, newDecisionRandom())
+}
+
+func newApp(config Config, decisionRandom *mathrand.Rand) (*App, error) {
 	db, err := sql.Open("sqlite", config.DatabasePath)
 	if err != nil {
 		return nil, err
@@ -153,7 +158,7 @@ func New(config Config) (*App, error) {
 		secureCookies:     config.SecureCookies,
 		dummyPasswordHash: dummyPasswordHash,
 		loginFailures:     make(map[string]loginFailureWindow),
-		mealLifecycle:     newMealLifecycle(db, newDecisionRandom()),
+		mealLifecycle:     newMealLifecycle(db, decisionRandom),
 	}
 	app.routes(config.WebDir)
 	return app, nil

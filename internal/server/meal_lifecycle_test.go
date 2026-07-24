@@ -441,62 +441,16 @@ func TestAcceptanceIsAccountScopedIdempotentAndOpensRecipe(t *testing.T) {
 }
 
 func TestPreferenceWeightAffectsRepeatedOnDemandDecisions(t *testing.T) {
-	app := openCatalogApp(t, "")
+	seed := int64(2)
+	app := openCatalogAppWithDecisionSeed(t, "", &seed)
 	t.Cleanup(func() { app.Close() })
-	sessionCookie := registerCatalogEater(t, app)
-
-	for _, body := range []string{
-		`{"dish_id":"vegetable_dish/番茄炒蛋.md","preference_weight":0.1}`,
-		`{"dish_id":"meat_dish/番茄牛腩.md","preference_weight":5}`,
-	} {
-		response := candidatePoolRequest(
-			t,
-			app,
-			http.MethodPost,
-			"/api/candidate-pool/dishes",
-			body,
-			sessionCookie,
-		)
-		if response.Code != http.StatusCreated {
-			t.Fatalf("add status = %d, want %d; body = %s", response.Code, http.StatusCreated, response.Body)
-		}
-	}
 
 	counts := map[string]int{}
-	for mealNumber := int64(1); mealNumber <= 80; mealNumber++ {
-		beginResponse := candidatePoolRequest(t, app, http.MethodPost, "/api/meals", "", sessionCookie)
-		if beginResponse.Code != http.StatusCreated {
-			t.Fatalf("Meal %d Begin status = %d, want %d; body = %s", mealNumber, beginResponse.Code, http.StatusCreated, beginResponse.Body)
-		}
-		var begun mealState
-		if err := json.NewDecoder(beginResponse.Body).Decode(&begun); err != nil {
-			t.Fatal(err)
-		}
-		counts[begun.Decision.Dish.ID]++
-
-		acceptResponse := candidatePoolRequest(
-			t,
-			app,
-			http.MethodPost,
-			"/api/decisions/"+strconv.FormatInt(begun.Decision.ID, 10)+"/accept",
-			"",
-			sessionCookie,
-		)
-		if acceptResponse.Code != http.StatusOK {
-			t.Fatalf("Meal %d Acceptance status = %d, want %d; body = %s", mealNumber, acceptResponse.Code, http.StatusOK, acceptResponse.Body)
-		}
-		var accepted acceptanceResult
-		if err := json.NewDecoder(acceptResponse.Body).Decode(&accepted); err != nil {
-			t.Fatal(err)
-		}
-		if accepted.EatingRecord.Sequence != mealNumber {
-			t.Fatalf(
-				"Meal %d Eating record sequence = %d, want %d",
-				mealNumber,
-				accepted.EatingRecord.Sequence,
-				mealNumber,
-			)
-		}
+	for sample := range 30 {
+		cookie := registerCandidateEater(t, app, "preference_eater_"+strconv.Itoa(sample))
+		addCandidatePoolDish(t, app, cookie, "vegetable_dish/番茄炒蛋.md", 0.1)
+		addCandidatePoolDish(t, app, cookie, "meat_dish/番茄牛腩.md", 5)
+		counts[beginMealDecision(t, app, cookie).Dish.ID]++
 	}
 
 	highWeight := counts["meat_dish/番茄牛腩.md"]
@@ -602,5 +556,248 @@ func TestCandidatePoolEmptyBlocksDecisionWithoutCreatingMeal(t *testing.T) {
 	if resumeResponse.Code != http.StatusOK ||
 		!strings.Contains(resumeResponse.Body.String(), `"status":"candidate_pool_empty"`) {
 		t.Errorf("Resume after blocked attempts = (%d, %q), want candidate_pool_empty", resumeResponse.Code, resumeResponse.Body)
+	}
+}
+
+func TestCooldownUsesAcceptanceSequenceWithinTheSameDay(t *testing.T) {
+	app := openCatalogApp(t, "")
+	t.Cleanup(func() { app.Close() })
+	sessionCookie := registerCandidateEater(t, app, "cooldown_eater")
+
+	tomatoEgg := "vegetable_dish/番茄炒蛋.md"
+	tomatoBeef := "meat_dish/番茄牛腩.md"
+	lemonWater := "drink/柠檬水.md"
+
+	addCandidatePoolDish(t, app, sessionCookie, tomatoEgg, 1)
+	acceptMealDecision(t, app, sessionCookie, beginMealDecision(t, app, sessionCookie), 1)
+	removeCandidatePoolDish(t, app, sessionCookie, tomatoEgg)
+
+	addCandidatePoolDish(t, app, sessionCookie, tomatoBeef, 1)
+	acceptMealDecision(t, app, sessionCookie, beginMealDecision(t, app, sessionCookie), 2)
+	removeCandidatePoolDish(t, app, sessionCookie, tomatoBeef)
+
+	addCandidatePoolDish(t, app, sessionCookie, tomatoEgg, 5)
+	addCandidatePoolDish(t, app, sessionCookie, tomatoBeef, 5)
+	addCandidatePoolDish(t, app, sessionCookie, lemonWater, 0.1)
+
+	third := beginMealDecision(t, app, sessionCookie)
+	if third.Dish.ID != lemonWater {
+		t.Fatalf("third Decision Dish = %q, want only non-Cooldown Dish %q", third.Dish.ID, lemonWater)
+	}
+	acceptMealDecision(t, app, sessionCookie, third, 3)
+
+	updateCandidatePoolDish(t, app, sessionCookie, tomatoEgg, 0.1)
+	updateCandidatePoolDish(t, app, sessionCookie, tomatoBeef, 5)
+	updateCandidatePoolDish(t, app, sessionCookie, lemonWater, 5)
+	fourth := beginMealDecision(t, app, sessionCookie)
+	if fourth.Dish.ID != tomatoEgg {
+		t.Errorf("fourth Decision Dish = %q, want Dish %q after two further Acceptances", fourth.Dish.ID, tomatoEgg)
+	}
+}
+
+func TestCooldownRelaxesOnlyAsFarAsNeededWithinCandidatePool(t *testing.T) {
+	app := openCatalogApp(t, "")
+	t.Cleanup(func() { app.Close() })
+	sessionCookie := registerCandidateEater(t, app, "cooldown_relaxation_eater")
+
+	tomatoEgg := "vegetable_dish/番茄炒蛋.md"
+	tomatoBeef := "meat_dish/番茄牛腩.md"
+
+	addCandidatePoolDish(t, app, sessionCookie, tomatoEgg, 1)
+	acceptMealDecision(t, app, sessionCookie, beginMealDecision(t, app, sessionCookie), 1)
+	removeCandidatePoolDish(t, app, sessionCookie, tomatoEgg)
+	addCandidatePoolDish(t, app, sessionCookie, tomatoBeef, 1)
+	acceptMealDecision(t, app, sessionCookie, beginMealDecision(t, app, sessionCookie), 2)
+	addCandidatePoolDish(t, app, sessionCookie, tomatoEgg, 0.1)
+	updateCandidatePoolDish(t, app, sessionCookie, tomatoBeef, 5)
+
+	decision := beginMealDecision(t, app, sessionCookie)
+	if decision.Dish.ID != tomatoEgg {
+		t.Errorf(
+			"relaxed Decision Dish = %q, want %q after shortening Cooldown from two records to one",
+			decision.Dish.ID,
+			tomatoEgg,
+		)
+	}
+}
+
+func TestRecencyWindowDownweightsRepeatedDishOutsideCooldown(t *testing.T) {
+	seed := int64(1)
+	app := openCatalogAppWithDecisionSeed(t, "", &seed)
+	t.Cleanup(func() { app.Close() })
+
+	tomatoEgg := "vegetable_dish/番茄炒蛋.md"
+	tomatoBeef := "meat_dish/番茄牛腩.md"
+	lemonWater := "drink/柠檬水.md"
+	counts := map[string]int{}
+
+	for sample := range 30 {
+		cookie := registerCandidateEater(t, app, "recency_eater_"+strconv.Itoa(sample))
+		addCandidatePoolDish(t, app, cookie, tomatoEgg, 1)
+		for sequence := int64(1); sequence <= 5; sequence++ {
+			acceptMealDecision(t, app, cookie, beginMealDecision(t, app, cookie), sequence)
+		}
+		removeCandidatePoolDish(t, app, cookie, tomatoEgg)
+		addCandidatePoolDish(t, app, cookie, tomatoBeef, 1)
+		for sequence := int64(6); sequence <= 7; sequence++ {
+			acceptMealDecision(t, app, cookie, beginMealDecision(t, app, cookie), sequence)
+		}
+		removeCandidatePoolDish(t, app, cookie, tomatoBeef)
+		addCandidatePoolDish(t, app, cookie, tomatoEgg, 1)
+		addCandidatePoolDish(t, app, cookie, lemonWater, 1)
+
+		counts[beginMealDecision(t, app, cookie).Dish.ID]++
+	}
+
+	if counts[lemonWater] < 25 {
+		t.Errorf(
+			"Decision counts = %#v, want fresh Dish selected in at least 25/30 deterministic samples",
+			counts,
+		)
+	}
+}
+
+func TestEatingHistoryIsAccountScoped(t *testing.T) {
+	seed := int64(1)
+	app := openCatalogAppWithDecisionSeed(t, "", &seed)
+	t.Cleanup(func() { app.Close() })
+	historyOwner := registerCandidateEater(t, app, "history_owner")
+	otherCookie := registerCandidateEater(t, app, "history_other")
+
+	tomatoEgg := "vegetable_dish/番茄炒蛋.md"
+	lemonWater := "drink/柠檬水.md"
+	addCandidatePoolDish(t, app, historyOwner, tomatoEgg, 1)
+	acceptMealDecision(t, app, historyOwner, beginMealDecision(t, app, historyOwner), 1)
+
+	addCandidatePoolDish(t, app, otherCookie, tomatoEgg, 5)
+	addCandidatePoolDish(t, app, otherCookie, lemonWater, 0.1)
+	decision := beginMealDecision(t, app, otherCookie)
+	if decision.Dish.ID != tomatoEgg {
+		t.Errorf(
+			"other Account Decision Dish = %q, want high-weight Dish %q despite owner's Cooldown",
+			decision.Dish.ID,
+			tomatoEgg,
+		)
+	}
+}
+
+func TestRerollPreservesEatingHistoryCooldown(t *testing.T) {
+	app := openCatalogApp(t, "")
+	t.Cleanup(func() { app.Close() })
+	cookie := registerCandidateEater(t, app, "reroll_cooldown_eater")
+
+	tomatoEgg := "vegetable_dish/番茄炒蛋.md"
+	addCandidatePoolDish(t, app, cookie, tomatoEgg, 1)
+	acceptMealDecision(t, app, cookie, beginMealDecision(t, app, cookie), 1)
+	addCandidatePoolDish(t, app, cookie, "meat_dish/番茄牛腩.md", 1)
+	addCandidatePoolDish(t, app, cookie, "drink/柠檬水.md", 1)
+
+	current := beginMealDecision(t, app, cookie)
+	response := candidatePoolRequest(
+		t,
+		app,
+		http.MethodPost,
+		"/api/decisions/"+strconv.FormatInt(current.ID, 10)+"/reroll",
+		"",
+		cookie,
+	)
+	if response.Code != http.StatusOK {
+		t.Fatalf("Reroll status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body)
+	}
+	var replacement mealState
+	if err := json.NewDecoder(response.Body).Decode(&replacement); err != nil {
+		t.Fatal(err)
+	}
+	if replacement.Decision.Dish.ID == tomatoEgg {
+		t.Errorf("Reroll Dish = %q, want accepted Dish to remain in Cooldown", tomatoEgg)
+	}
+	if replacement.Decision.Dish.ID == current.Dish.ID {
+		t.Errorf("Reroll Dish = %q, want the other eligible Candidate pool Dish", current.Dish.ID)
+	}
+}
+
+func addCandidatePoolDish(t *testing.T, app http.Handler, cookie *http.Cookie, dishID string, weight float64) {
+	t.Helper()
+	response := candidatePoolRequest(
+		t,
+		app,
+		http.MethodPost,
+		"/api/candidate-pool/dishes",
+		`{"dish_id":`+strconv.Quote(dishID)+`,"preference_weight":`+strconv.FormatFloat(weight, 'f', -1, 64)+`}`,
+		cookie,
+	)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("add Dish %q status = %d, want %d; body = %s", dishID, response.Code, http.StatusCreated, response.Body)
+	}
+}
+
+func updateCandidatePoolDish(t *testing.T, app http.Handler, cookie *http.Cookie, dishID string, weight float64) {
+	t.Helper()
+	response := candidatePoolRequest(
+		t,
+		app,
+		http.MethodPatch,
+		"/api/candidate-pool/dishes",
+		`{"dish_id":`+strconv.Quote(dishID)+`,"preference_weight":`+strconv.FormatFloat(weight, 'f', -1, 64)+`}`,
+		cookie,
+	)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("update Dish %q status = %d, want %d; body = %s", dishID, response.Code, http.StatusNoContent, response.Body)
+	}
+}
+
+func removeCandidatePoolDish(t *testing.T, app http.Handler, cookie *http.Cookie, dishID string) {
+	t.Helper()
+	response := candidatePoolRequest(
+		t,
+		app,
+		http.MethodDelete,
+		"/api/candidate-pool/dishes?dish_id="+url.QueryEscape(dishID),
+		"",
+		cookie,
+	)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("remove Dish %q status = %d, want %d; body = %s", dishID, response.Code, http.StatusNoContent, response.Body)
+	}
+}
+
+func beginMealDecision(t *testing.T, app http.Handler, cookie *http.Cookie) mealDecision {
+	t.Helper()
+	response := candidatePoolRequest(t, app, http.MethodPost, "/api/meals", "", cookie)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("Begin status = %d, want %d; body = %s", response.Code, http.StatusCreated, response.Body)
+	}
+	var result mealState
+	if err := json.NewDecoder(response.Body).Decode(&result); err != nil {
+		t.Fatal(err)
+	}
+	return result.Decision
+}
+
+func acceptMealDecision(
+	t *testing.T,
+	app http.Handler,
+	cookie *http.Cookie,
+	decision mealDecision,
+	wantSequence int64,
+) {
+	t.Helper()
+	response := candidatePoolRequest(
+		t,
+		app,
+		http.MethodPost,
+		"/api/decisions/"+strconv.FormatInt(decision.ID, 10)+"/accept",
+		"",
+		cookie,
+	)
+	if response.Code != http.StatusOK {
+		t.Fatalf("Acceptance status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body)
+	}
+	var result acceptanceResult
+	if err := json.NewDecoder(response.Body).Decode(&result); err != nil {
+		t.Fatal(err)
+	}
+	if result.EatingRecord.Sequence != wantSequence {
+		t.Fatalf("Eating record sequence = %d, want %d", result.EatingRecord.Sequence, wantSequence)
 	}
 }

@@ -17,6 +17,8 @@ const (
 	mealStatusCandidatePoolEmpty mealStatus = "candidate_pool_empty"
 	mealStatusReady              mealStatus = "ready"
 	mealStatusActiveDecision     mealStatus = "active_decision"
+	defaultCooldown                         = 2
+	defaultRecencyWindow                    = 7
 )
 
 const activeDecisionQuery = `
@@ -133,19 +135,77 @@ func (m *mealLifecycle) poolCandidates(
 	if err != nil {
 		return nil, err
 	}
-	candidates := make([]weightedDish, 0)
+	allCandidates := make([]weightedDish, 0)
 	for rows.Next() {
 		var candidate weightedDish
 		if err := rows.Scan(&candidate.id, &candidate.name, &candidate.weight); err != nil {
 			rows.Close()
 			return nil, err
 		}
-		candidates = append(candidates, candidate)
+		allCandidates = append(allCandidates, candidate)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	return candidates, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	historyRows, err := transaction.QueryContext(
+		context,
+		`SELECT dish_id
+		 FROM eating_records
+		 WHERE account_id = ?
+		 ORDER BY sequence DESC
+		 LIMIT ?`,
+		accountID,
+		defaultRecencyWindow,
+	)
+	if err != nil {
+		return nil, err
+	}
+	history := make([]string, 0, defaultRecencyWindow)
+	for historyRows.Next() {
+		var dishID string
+		if err := historyRows.Scan(&dishID); err != nil {
+			historyRows.Close()
+			return nil, err
+		}
+		history = append(history, dishID)
+	}
+	if err := historyRows.Close(); err != nil {
+		return nil, err
+	}
+	if err := historyRows.Err(); err != nil {
+		return nil, err
+	}
+
+	fullCooldown := min(len(history), defaultCooldown)
+	for cooldown := fullCooldown; cooldown >= 0; cooldown-- {
+		excluded := make(map[string]bool, cooldown)
+		for _, dishID := range history[:cooldown] {
+			excluded[dishID] = true
+		}
+		candidates := make([]weightedDish, 0, len(allCandidates))
+		for _, candidate := range allCandidates {
+			if !excluded[candidate.id] {
+				candidates = append(candidates, candidate)
+			}
+		}
+		if len(candidates) > 0 {
+			if cooldown == fullCooldown {
+				for _, dishID := range history[fullCooldown:] {
+					for index := range candidates {
+						if candidates[index].id == dishID {
+							candidates[index].weight /= 2
+						}
+					}
+				}
+			}
+			return candidates, nil
+		}
+	}
+	return allCandidates, nil
 }
 
 func (m *mealLifecycle) chooseWeightedDish(candidates []weightedDish) weightedDish {
