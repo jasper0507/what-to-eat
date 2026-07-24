@@ -4,16 +4,20 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/jasper0507/what-to-eat/internal/server"
 )
 
 type mealDecision struct {
 	ID     int64  `json:"id"`
 	MealID int64  `json:"meal_id"`
 	Mode   string `json:"mode"`
+	Reason string `json:"reason"`
 	Dish   struct {
 		ID   string `json:"id"`
 		Name string `json:"name"`
@@ -32,6 +36,188 @@ type acceptanceResult struct {
 	Recipe struct {
 		Dish candidateDish `json:"dish"`
 	} `json:"recipe"`
+}
+
+func TestBeginUsesDiscoveryWhenPoolAndCooldownEligibleSetAreSmall(t *testing.T) {
+	seed := int64(1)
+	app := openCatalogAppWithDiscovery(t, server.DiscoveryConfig{
+		Enabled:               true,
+		MaxPoolSize:           1,
+		MaxEligibleDishes:     1,
+		MinRerolls:            2,
+		RequiredSignals:       2,
+		RecentMealWindow:      3,
+		MaxDiscoveriesPerMeal: 2,
+	}, seed)
+	t.Cleanup(func() { app.Close() })
+	cookie := registerCandidateEater(t, app, "discovery_begin_eater")
+	poolDish := "vegetable_dish/番茄炒蛋.md"
+	addCandidatePoolDish(t, app, cookie, poolDish, 5)
+
+	decision := beginMealDecision(t, app, cookie)
+
+	if decision.Mode != "discovery" || decision.Reason == "" {
+		t.Fatalf("Decision = %#v, want labeled Discovery with a trigger reason", decision)
+	}
+	if decision.Dish.ID == poolDish {
+		t.Fatalf("Discovery Dish = %q, want a Catalog Dish outside Candidate pool", decision.Dish.ID)
+	}
+	similar := map[string]bool{
+		"vegetable_dish/番茄豆腐.md": true,
+		"vegetable_dish/番茄土豆.md": true,
+	}
+	if !similar[decision.Dish.ID] {
+		t.Errorf("Discovery Dish = %q, want a fixture sharing category and name keyword with 番茄炒蛋", decision.Dish.ID)
+	}
+}
+
+func TestDiscoveryRerollUsesSessionPenaltyAndStopsAtMealLimit(t *testing.T) {
+	seed := int64(1)
+	app := openCatalogAppWithDiscovery(t, server.DiscoveryConfig{
+		Enabled:               true,
+		MaxPoolSize:           1,
+		MaxEligibleDishes:     1,
+		MinRerolls:            2,
+		RequiredSignals:       2,
+		RecentMealWindow:      3,
+		MaxDiscoveriesPerMeal: 2,
+	}, seed)
+	t.Cleanup(func() { app.Close() })
+	cookie := registerCandidateEater(t, app, "discovery_reroll_eater")
+	poolDish := "vegetable_dish/番茄炒蛋.md"
+	addCandidatePoolDish(t, app, cookie, poolDish, 5)
+
+	first := beginMealDecision(t, app, cookie)
+	second := rerollMealDecision(t, app, cookie, first)
+	if second.Mode != "discovery" || second.Reason == "" {
+		t.Fatalf("first Discovery Reroll = %#v, want another labeled Discovery", second)
+	}
+	if second.Dish.ID == first.Dish.ID {
+		t.Errorf("first Discovery Reroll repeated %q, want Session penalty to prefer an unseen similar Dish", second.Dish.ID)
+	}
+
+	third := rerollMealDecision(t, app, cookie, second)
+	if third.Mode != "pool" || third.Dish.ID != poolDish || third.Reason != "" {
+		t.Errorf("Decision after two Discoveries = %#v, want capped Meal to return Pool pick %q", third, poolDish)
+	}
+}
+
+func TestCurrentAndRecentRerollsRaiseDiscoveryPressure(t *testing.T) {
+	seed := int64(3)
+	app := openCatalogAppWithDiscovery(t, server.DiscoveryConfig{
+		Enabled:               true,
+		MaxPoolSize:           2,
+		MaxEligibleDishes:     0,
+		MinRerolls:            1,
+		RequiredSignals:       2,
+		RecentMealWindow:      3,
+		MaxDiscoveriesPerMeal: 2,
+	}, seed)
+	t.Cleanup(func() { app.Close() })
+	cookie := registerCandidateEater(t, app, "discovery_reroll_pressure")
+	poolDishIDs := map[string]bool{
+		"vegetable_dish/番茄炒蛋.md": true,
+		"drink/柠檬水.md":           true,
+	}
+	addCandidatePoolDish(t, app, cookie, "vegetable_dish/番茄炒蛋.md", 5)
+	addCandidatePoolDish(t, app, cookie, "drink/柠檬水.md", 0.1)
+
+	initial := beginMealDecision(t, app, cookie)
+	if initial.Mode != "pool" {
+		t.Fatalf("initial Decision = %#v, want one pressure signal to stay a Pool pick", initial)
+	}
+	discovery := rerollMealDecision(t, app, cookie, initial)
+	if discovery.Mode != "discovery" || poolDishIDs[discovery.Dish.ID] {
+		t.Fatalf("Decision after current Reroll = %#v, want out-of-pool Discovery", discovery)
+	}
+	acceptMealDecision(t, app, cookie, discovery, 1)
+
+	nextMeal := beginMealDecision(t, app, cookie)
+	if nextMeal.Mode != "discovery" || poolDishIDs[nextMeal.Dish.ID] {
+		t.Errorf("next Meal Decision = %#v, want recent Reroll to keep pressure high", nextMeal)
+	}
+	if nextMeal.Dish.ID == discovery.Dish.ID {
+		t.Errorf("next Meal Discovery repeated accepted Dish %q inside Cooldown", discovery.Dish.ID)
+	}
+}
+
+func TestCooldownEligibleCountRaisesDiscoveryPressure(t *testing.T) {
+	seed := int64(1)
+	app := openCatalogAppWithDiscovery(t, server.DiscoveryConfig{
+		Enabled:               true,
+		MaxPoolSize:           2,
+		MaxEligibleDishes:     1,
+		MinRerolls:            100,
+		RequiredSignals:       1,
+		RecentMealWindow:      3,
+		MaxDiscoveriesPerMeal: 2,
+	}, seed)
+	t.Cleanup(func() { app.Close() })
+	cookie := registerCandidateEater(t, app, "discovery_cooldown_pressure")
+	poolDishIDs := map[string]bool{
+		"vegetable_dish/番茄炒蛋.md": true,
+		"meat_dish/番茄牛腩.md":      true,
+		"drink/柠檬水.md":           true,
+	}
+	for dishID := range poolDishIDs {
+		addCandidatePoolDish(t, app, cookie, dishID, 1)
+	}
+
+	for sequence := int64(1); sequence <= 2; sequence++ {
+		decision := beginMealDecision(t, app, cookie)
+		if decision.Mode != "pool" {
+			t.Fatalf("Decision %d = %#v, want more than one Cooldown-eligible Dish to stay in pool", sequence, decision)
+		}
+		acceptMealDecision(t, app, cookie, decision, sequence)
+	}
+
+	constrained := beginMealDecision(t, app, cookie)
+	if constrained.Mode != "discovery" || poolDishIDs[constrained.Dish.ID] {
+		t.Errorf("constrained Decision = %#v, want Discovery when only one pool Dish remains Cooldown-eligible", constrained)
+	}
+}
+
+func openCatalogAppWithDiscovery(
+	t *testing.T,
+	discovery server.DiscoveryConfig,
+	seed int64,
+) *server.App {
+	t.Helper()
+	config := server.Config{
+		DatabasePath: filepath.Join(t.TempDir(), "what-to-eat.db"),
+		CatalogDir:   filepath.Join("testdata", "catalog"),
+		Discovery:    &discovery,
+	}
+	app, err := server.NewWithDecisionRandomSeedForTest(config, seed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return app
+}
+
+func rerollMealDecision(
+	t *testing.T,
+	app http.Handler,
+	cookie *http.Cookie,
+	current mealDecision,
+) mealDecision {
+	t.Helper()
+	response := candidatePoolRequest(
+		t,
+		app,
+		http.MethodPost,
+		"/api/decisions/"+strconv.FormatInt(current.ID, 10)+"/reroll",
+		"",
+		cookie,
+	)
+	if response.Code != http.StatusOK {
+		t.Fatalf("Reroll status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body)
+	}
+	var result mealState
+	if err := json.NewDecoder(response.Body).Decode(&result); err != nil {
+		t.Fatal(err)
+	}
+	return result.Decision
 }
 
 func TestResumeReflectsCandidatePoolReadiness(t *testing.T) {

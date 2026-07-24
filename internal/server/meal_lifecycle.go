@@ -7,6 +7,7 @@ import (
 	"math/rand"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -14,15 +15,17 @@ import (
 )
 
 const (
-	mealStatusCandidatePoolEmpty mealStatus = "candidate_pool_empty"
-	mealStatusReady              mealStatus = "ready"
-	mealStatusActiveDecision     mealStatus = "active_decision"
-	defaultCooldown                         = 2
-	defaultRecencyWindow                    = 7
+	mealStatusCandidatePoolEmpty mealStatus   = "candidate_pool_empty"
+	mealStatusReady              mealStatus   = "ready"
+	mealStatusActiveDecision     mealStatus   = "active_decision"
+	decisionModePool             decisionMode = "pool"
+	decisionModeDiscovery        decisionMode = "discovery"
+	defaultCooldown                           = 2
+	defaultRecencyWindow                      = 7
 )
 
 const activeDecisionQuery = `
-	SELECT decisions.id, meals.id, decisions.mode,
+	SELECT decisions.id, meals.id, decisions.mode, decisions.reason,
 	       catalog_dishes.source_path, catalog_dishes.name
 	FROM meals
 	JOIN decisions ON decisions.meal_id = meals.id
@@ -37,19 +40,66 @@ var (
 )
 
 type mealLifecycle struct {
-	db       *sql.DB
-	random   *rand.Rand
-	randomMu sync.Mutex
+	db        *sql.DB
+	random    *rand.Rand
+	randomMu  sync.Mutex
+	discovery DiscoveryConfig
 }
 
 type mealStatus string
+type decisionMode string
+
+type DiscoveryConfig struct {
+	Enabled               bool
+	MaxPoolSize           int
+	MaxEligibleDishes     int
+	MinRerolls            int
+	RequiredSignals       int
+	RecentMealWindow      int
+	MaxDiscoveriesPerMeal int
+}
 
 func newDecisionRandom() *rand.Rand {
 	return rand.New(rand.NewSource(time.Now().UnixNano()))
 }
 
-func newMealLifecycle(db *sql.DB, random *rand.Rand) *mealLifecycle {
-	return &mealLifecycle{db: db, random: random}
+func DefaultDiscoveryConfig() DiscoveryConfig {
+	return DiscoveryConfig{
+		Enabled:               true,
+		MaxPoolSize:           3,
+		MaxEligibleDishes:     1,
+		MinRerolls:            2,
+		RequiredSignals:       2,
+		RecentMealWindow:      3,
+		MaxDiscoveriesPerMeal: 2,
+	}
+}
+
+func normalizeDiscoveryConfig(config *DiscoveryConfig) (DiscoveryConfig, error) {
+	if config == nil {
+		return DefaultDiscoveryConfig(), nil
+	}
+	if !config.Enabled {
+		return *config, nil
+	}
+	if config.MaxPoolSize < 0 ||
+		config.MaxEligibleDishes < 0 ||
+		config.MinRerolls < 1 ||
+		config.RequiredSignals < 1 ||
+		config.RequiredSignals > 3 ||
+		config.RecentMealWindow < 0 ||
+		config.MaxDiscoveriesPerMeal < 1 {
+		return DiscoveryConfig{}, errors.New("invalid Discovery config")
+	}
+	return *config, nil
+}
+
+func newMealLifecycle(
+	db *sql.DB,
+	random *rand.Rand,
+	discovery DiscoveryConfig,
+) *mealLifecycle {
+	return &mealLifecycle{db: db, random: random, discovery: discovery}
 }
 
 type mealState struct {
@@ -60,7 +110,8 @@ type mealState struct {
 type mealDecisionResponse struct {
 	ID     int64               `json:"id"`
 	MealID int64               `json:"meal_id"`
-	Mode   string              `json:"mode"`
+	Mode   decisionMode        `json:"mode"`
+	Reason string              `json:"reason,omitempty"`
 	Dish   catalogDishResponse `json:"dish"`
 }
 
@@ -71,6 +122,19 @@ type eatingRecordResponse struct {
 type weightedDish struct {
 	id, name string
 	weight   float64
+}
+
+type poolSnapshot struct {
+	members          []weightedDish
+	selectable       []weightedDish
+	cooldownEligible int
+	history          []string
+}
+
+type decisionChoice struct {
+	dish   weightedDish
+	mode   decisionMode
+	reason string
 }
 
 type recipeReferenceResponse struct {
@@ -84,9 +148,17 @@ type acceptanceResponse struct {
 
 func scanActiveDecision(row *sql.Row) (mealState, error) {
 	var decision mealDecisionResponse
-	var dishID, dishName string
-	err := row.Scan(&decision.ID, &decision.MealID, &decision.Mode, &dishID, &dishName)
+	var mode, dishID, dishName string
+	err := row.Scan(
+		&decision.ID,
+		&decision.MealID,
+		&mode,
+		&decision.Reason,
+		&dishID,
+		&dishName,
+	)
 	if err == nil {
+		decision.Mode = decisionMode(mode)
 		decision.Dish = catalogDish(dishID, dishName)
 		return mealState{Status: mealStatusActiveDecision, Decision: &decision}, nil
 	}
@@ -122,7 +194,7 @@ func (m *mealLifecycle) poolCandidates(
 	context context.Context,
 	transaction *sql.Tx,
 	accountID int64,
-) ([]weightedDish, error) {
+) (poolSnapshot, error) {
 	rows, err := transaction.QueryContext(
 		context,
 		`SELECT catalog_dishes.source_path, catalog_dishes.name, candidate_pool.preference_weight
@@ -133,22 +205,22 @@ func (m *mealLifecycle) poolCandidates(
 		accountID,
 	)
 	if err != nil {
-		return nil, err
+		return poolSnapshot{}, err
 	}
 	allCandidates := make([]weightedDish, 0)
 	for rows.Next() {
 		var candidate weightedDish
 		if err := rows.Scan(&candidate.id, &candidate.name, &candidate.weight); err != nil {
 			rows.Close()
-			return nil, err
+			return poolSnapshot{}, err
 		}
 		allCandidates = append(allCandidates, candidate)
 	}
 	if err := rows.Close(); err != nil {
-		return nil, err
+		return poolSnapshot{}, err
 	}
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return poolSnapshot{}, err
 	}
 
 	historyRows, err := transaction.QueryContext(
@@ -162,25 +234,26 @@ func (m *mealLifecycle) poolCandidates(
 		defaultRecencyWindow,
 	)
 	if err != nil {
-		return nil, err
+		return poolSnapshot{}, err
 	}
 	history := make([]string, 0, defaultRecencyWindow)
 	for historyRows.Next() {
 		var dishID string
 		if err := historyRows.Scan(&dishID); err != nil {
 			historyRows.Close()
-			return nil, err
+			return poolSnapshot{}, err
 		}
 		history = append(history, dishID)
 	}
 	if err := historyRows.Close(); err != nil {
-		return nil, err
+		return poolSnapshot{}, err
 	}
 	if err := historyRows.Err(); err != nil {
-		return nil, err
+		return poolSnapshot{}, err
 	}
 
 	fullCooldown := min(len(history), defaultCooldown)
+	snapshot := poolSnapshot{members: allCandidates, history: history}
 	for cooldown := fullCooldown; cooldown >= 0; cooldown-- {
 		excluded := make(map[string]bool, cooldown)
 		for _, dishID := range history[:cooldown] {
@@ -192,6 +265,9 @@ func (m *mealLifecycle) poolCandidates(
 				candidates = append(candidates, candidate)
 			}
 		}
+		if cooldown == fullCooldown {
+			snapshot.cooldownEligible = len(candidates)
+		}
 		if len(candidates) > 0 {
 			if cooldown == fullCooldown {
 				for _, dishID := range history[fullCooldown:] {
@@ -202,10 +278,203 @@ func (m *mealLifecycle) poolCandidates(
 					}
 				}
 			}
-			return candidates, nil
+			snapshot.selectable = candidates
+			return snapshot, nil
 		}
 	}
-	return allCandidates, nil
+	snapshot.selectable = allCandidates
+	return snapshot, nil
+}
+
+func (m *mealLifecycle) recentRerolls(
+	context context.Context,
+	transaction *sql.Tx,
+	accountID int64,
+) (int, error) {
+	if !m.discovery.Enabled || m.discovery.RecentMealWindow <= 0 {
+		return 0, nil
+	}
+	var rerolls int
+	err := transaction.QueryRowContext(
+		context,
+		`SELECT COUNT(*)
+		 FROM decisions
+		 WHERE rerolled_to_id IS NOT NULL AND meal_id IN (
+			SELECT id
+			FROM meals
+			WHERE account_id = ? AND status = 'accepted'
+			ORDER BY id DESC
+			LIMIT ?
+		 )`,
+		accountID,
+		m.discovery.RecentMealWindow,
+	).Scan(&rerolls)
+	return rerolls, err
+}
+
+func (m *mealLifecycle) discoveryPressure(
+	pool poolSnapshot,
+	rerolls int,
+) (bool, string) {
+	if !m.discovery.Enabled {
+		return false, ""
+	}
+	reasons := make([]string, 0, 3)
+	if len(pool.members) <= m.discovery.MaxPoolSize {
+		reasons = append(reasons, "Candidate pool 较小")
+	}
+	if pool.cooldownEligible <= m.discovery.MaxEligibleDishes {
+		reasons = append(reasons, "Cooldown 后可选 Dish 较少")
+	}
+	if rerolls >= m.discovery.MinRerolls {
+		reasons = append(reasons, "最近 Reroll 较多")
+	}
+	if len(reasons) < m.discovery.RequiredSignals {
+		return false, ""
+	}
+	return true, strings.Join(reasons, "，") + "，试试相似的新菜。"
+}
+
+func (m *mealLifecycle) discoveryDish(
+	context context.Context,
+	transaction *sql.Tx,
+	accountID int64,
+	pool poolSnapshot,
+	shown map[string]int,
+) (weightedDish, bool, error) {
+	rows, err := transaction.QueryContext(
+		context,
+		`SELECT catalog_dishes.source_path, catalog_dishes.name
+		 FROM catalog_dishes
+		 WHERE NOT EXISTS (
+			SELECT 1
+			FROM candidate_pool
+			WHERE candidate_pool.account_id = ?
+			  AND candidate_pool.dish_id = catalog_dishes.source_path
+		 )
+		 ORDER BY catalog_dishes.source_path`,
+		accountID,
+	)
+	if err != nil {
+		return weightedDish{}, false, err
+	}
+	defer rows.Close()
+
+	candidates := make([]weightedDish, 0)
+	minShown := -1
+	bestSimilarity := 0.0
+	fullCooldown := min(len(pool.history), defaultCooldown)
+	cooldown := make(map[string]bool, fullCooldown)
+	for _, dishID := range pool.history[:fullCooldown] {
+		cooldown[dishID] = true
+	}
+	for rows.Next() {
+		var candidate weightedDish
+		if err := rows.Scan(&candidate.id, &candidate.name); err != nil {
+			return weightedDish{}, false, err
+		}
+		if cooldown[candidate.id] {
+			continue
+		}
+		for _, reference := range pool.members {
+			candidate.weight = max(candidate.weight, dishSimilarity(candidate, reference)*reference.weight)
+		}
+		if candidate.weight == 0 {
+			continue
+		}
+		for _, dishID := range pool.history[fullCooldown:] {
+			if candidate.id == dishID {
+				candidate.weight /= 2
+			}
+		}
+		timesShown := shown[candidate.id]
+		switch {
+		case minShown == -1 || timesShown < minShown:
+			minShown = timesShown
+			bestSimilarity = candidate.weight
+			candidates = append(candidates[:0], candidate)
+		case timesShown == minShown && candidate.weight > bestSimilarity:
+			bestSimilarity = candidate.weight
+			candidates = append(candidates[:0], candidate)
+		case timesShown == minShown && candidate.weight == bestSimilarity:
+			candidates = append(candidates, candidate)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return weightedDish{}, false, err
+	}
+	if len(candidates) == 0 {
+		return weightedDish{}, false, nil
+	}
+	return m.chooseWeightedDish(candidates), true, nil
+}
+
+func (m *mealLifecycle) chooseDecision(
+	context context.Context,
+	transaction *sql.Tx,
+	accountID int64,
+	pool poolSnapshot,
+	fallback weightedDish,
+	rerolls, discoveryCount int,
+	shown map[string]int,
+) (decisionChoice, error) {
+	choice := decisionChoice{dish: fallback, mode: decisionModePool}
+	triggered, reason := m.discoveryPressure(pool, rerolls)
+	if !triggered || discoveryCount >= m.discovery.MaxDiscoveriesPerMeal {
+		return choice, nil
+	}
+	discovery, found, err := m.discoveryDish(
+		context,
+		transaction,
+		accountID,
+		pool,
+		shown,
+	)
+	if err != nil {
+		return decisionChoice{}, err
+	}
+	if found {
+		choice.dish = discovery
+		choice.mode = decisionModeDiscovery
+		choice.reason = reason
+	}
+	return choice, nil
+}
+
+func dishSimilarity(candidate, reference weightedDish) float64 {
+	candidatePath := strings.Split(candidate.id, "/")
+	referencePath := strings.Split(reference.id, "/")
+	score := 0.0
+	if len(candidatePath) > 1 &&
+		len(referencePath) > 1 &&
+		candidatePath[0] == referencePath[0] {
+		score += 4
+	}
+	referenceTags := make(map[string]bool)
+	for _, tag := range referencePath[1:max(1, len(referencePath)-1)] {
+		referenceTags[tag] = true
+	}
+	for _, tag := range candidatePath[1:max(1, len(candidatePath)-1)] {
+		if referenceTags[tag] {
+			score += 2
+		}
+	}
+	referenceKeywords := nameBigrams(reference.name)
+	for keyword := range nameBigrams(candidate.name) {
+		if referenceKeywords[keyword] {
+			score += 3
+		}
+	}
+	return score
+}
+
+func nameBigrams(name string) map[string]bool {
+	runes := []rune(name)
+	keywords := make(map[string]bool, max(0, len(runes)-1))
+	for index := 0; index+1 < len(runes); index++ {
+		keywords[string(runes[index:index+2])] = true
+	}
+	return keywords
 }
 
 func (m *mealLifecycle) chooseWeightedDish(candidates []weightedDish) weightedDish {
@@ -243,14 +512,30 @@ func (m *mealLifecycle) Begin(context context.Context, accountID int64) (state m
 		return mealState{}, false, err
 	}
 
-	candidates, err := m.poolCandidates(context, transaction, accountID)
+	pool, err := m.poolCandidates(context, transaction, accountID)
 	if err != nil {
 		return mealState{}, false, err
 	}
-	if len(candidates) == 0 {
+	if len(pool.selectable) == 0 {
 		return mealState{Status: mealStatusCandidatePoolEmpty}, false, errCandidatePoolEmpty
 	}
-	selected := m.chooseWeightedDish(candidates)
+	recentRerolls, err := m.recentRerolls(context, transaction, accountID)
+	if err != nil {
+		return mealState{}, false, err
+	}
+	choice, err := m.chooseDecision(
+		context,
+		transaction,
+		accountID,
+		pool,
+		m.chooseWeightedDish(pool.selectable),
+		recentRerolls,
+		0,
+		nil,
+	)
+	if err != nil {
+		return mealState{}, false, err
+	}
 
 	mealResult, err := transaction.ExecContext(
 		context,
@@ -267,10 +552,12 @@ func (m *mealLifecycle) Begin(context context.Context, accountID int64) (state m
 	}
 	decisionResult, err := transaction.ExecContext(
 		context,
-		`INSERT INTO decisions (meal_id, dish_id, mode, status, created_at)
-		 VALUES (?, ?, 'pool', 'active', unixepoch())`,
+		`INSERT INTO decisions (meal_id, dish_id, mode, reason, status, created_at)
+		 VALUES (?, ?, ?, ?, 'active', unixepoch())`,
 		decision.MealID,
-		selected.id,
+		choice.dish.id,
+		string(choice.mode),
+		choice.reason,
 	)
 	if err != nil {
 		return mealState{}, false, err
@@ -279,8 +566,9 @@ func (m *mealLifecycle) Begin(context context.Context, accountID int64) (state m
 	if err != nil {
 		return mealState{}, false, err
 	}
-	decision.Mode = "pool"
-	decision.Dish = catalogDish(selected.id, selected.name)
+	decision.Mode = choice.mode
+	decision.Reason = choice.reason
+	decision.Dish = catalogDish(choice.dish.id, choice.dish.name)
 	if err := transaction.Commit(); err != nil {
 		return mealState{}, false, err
 	}
@@ -319,8 +607,8 @@ func (m *mealLifecycle) Reroll(
 	if replacementID.Valid {
 		replacement, err := scanActiveDecision(transaction.QueryRowContext(
 			context,
-			`SELECT decisions.id, meals.id, decisions.mode,
-			        catalog_dishes.source_path, catalog_dishes.name
+			`SELECT decisions.id, meals.id, decisions.mode, decisions.reason,
+				        catalog_dishes.source_path, catalog_dishes.name
 			 FROM decisions
 			 JOIN meals ON meals.id = decisions.meal_id
 			 JOIN catalog_dishes ON catalog_dishes.source_path = decisions.dish_id
@@ -338,31 +626,36 @@ func (m *mealLifecycle) Reroll(
 		return mealState{}, errDecisionNotFound
 	}
 
-	candidates, err := m.poolCandidates(context, transaction, accountID)
+	pool, err := m.poolCandidates(context, transaction, accountID)
 	if err != nil {
 		return mealState{}, err
 	}
-	if len(candidates) == 0 {
+	if len(pool.selectable) == 0 {
 		return mealState{Status: mealStatusCandidatePoolEmpty}, errCandidatePoolEmpty
 	}
 
 	shown := make(map[string]int)
 	rows, err := transaction.QueryContext(
 		context,
-		"SELECT dish_id, COUNT(*) FROM decisions WHERE meal_id = ? GROUP BY dish_id",
+		"SELECT dish_id, mode FROM decisions WHERE meal_id = ?",
 		mealID,
 	)
 	if err != nil {
 		return mealState{}, err
 	}
+	decisionCount := 0
+	discoveryCount := 0
 	for rows.Next() {
-		var dishID string
-		var count int
-		if err := rows.Scan(&dishID, &count); err != nil {
+		var dishID, mode string
+		if err := rows.Scan(&dishID, &mode); err != nil {
 			rows.Close()
 			return mealState{}, err
 		}
-		shown[dishID] = count
+		shown[dishID]++
+		decisionCount++
+		if mode == "discovery" {
+			discoveryCount++
+		}
 	}
 	if err := rows.Close(); err != nil {
 		return mealState{}, err
@@ -371,10 +664,10 @@ func (m *mealLifecycle) Reroll(
 		return mealState{}, err
 	}
 
-	leastShown := make([]weightedDish, 0, len(candidates))
+	leastShown := make([]weightedDish, 0, len(pool.selectable))
 	minShown := -1
-	for _, candidate := range candidates {
-		if len(candidates) > 1 && candidate.id == currentDishID {
+	for _, candidate := range pool.selectable {
+		if len(pool.selectable) > 1 && candidate.id == currentDishID {
 			continue
 		}
 		count := shown[candidate.id]
@@ -386,7 +679,25 @@ func (m *mealLifecycle) Reroll(
 			leastShown = append(leastShown, candidate)
 		}
 	}
-	selected := m.chooseWeightedDish(leastShown)
+	recentRerolls, err := m.recentRerolls(context, transaction, accountID)
+	if err != nil {
+		return mealState{}, err
+	}
+	completedRerolls := max(0, decisionCount-1)
+	rerollsIncludingCurrentRequest := completedRerolls + 1
+	choice, err := m.chooseDecision(
+		context,
+		transaction,
+		accountID,
+		pool,
+		m.chooseWeightedDish(leastShown),
+		rerollsIncludingCurrentRequest+recentRerolls,
+		discoveryCount,
+		shown,
+	)
+	if err != nil {
+		return mealState{}, err
+	}
 
 	if _, err := transaction.ExecContext(
 		context,
@@ -397,10 +708,12 @@ func (m *mealLifecycle) Reroll(
 	}
 	result, err := transaction.ExecContext(
 		context,
-		`INSERT INTO decisions (meal_id, dish_id, mode, status, created_at)
-		 VALUES (?, ?, 'pool', 'active', unixepoch())`,
+		`INSERT INTO decisions (meal_id, dish_id, mode, reason, status, created_at)
+		 VALUES (?, ?, ?, ?, 'active', unixepoch())`,
 		mealID,
-		selected.id,
+		choice.dish.id,
+		string(choice.mode),
+		choice.reason,
 	)
 	if err != nil {
 		return mealState{}, err
@@ -424,8 +737,9 @@ func (m *mealLifecycle) Reroll(
 	replacement := mealDecisionResponse{
 		ID:     newDecisionID,
 		MealID: mealID,
-		Mode:   "pool",
-		Dish:   catalogDish(selected.id, selected.name),
+		Mode:   choice.mode,
+		Reason: choice.reason,
+		Dish:   catalogDish(choice.dish.id, choice.dish.name),
 	}
 	return mealState{Status: mealStatusActiveDecision, Decision: &replacement}, nil
 }
@@ -628,4 +942,100 @@ func migrateRerollSchema(db *sql.DB) error {
 			WHERE status = 'active' AND rerolled_to_id IS NULL;
 	`)
 	return err
+}
+
+func migrateDiscoverySchema(db *sql.DB) (err error) {
+	var createSQL string
+	if err := db.QueryRow(
+		"SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'decisions'",
+	).Scan(&createSQL); err != nil {
+		return err
+	}
+	var hasReason bool
+	if err := db.QueryRow(`
+		SELECT EXISTS(
+			SELECT 1 FROM pragma_table_info('decisions') WHERE name = 'reason'
+		)
+	`).Scan(&hasReason); err != nil {
+		return err
+	}
+	if hasReason && strings.Contains(createSQL, "'discovery'") {
+		return nil
+	}
+
+	if _, err := db.Exec("PRAGMA foreign_keys = OFF"); err != nil {
+		return err
+	}
+	foreignKeysDisabled := true
+	defer func() {
+		if foreignKeysDisabled {
+			_, restoreErr := db.Exec("PRAGMA foreign_keys = ON")
+			err = errors.Join(err, restoreErr)
+		}
+	}()
+
+	transaction, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer transaction.Rollback()
+	if _, err := transaction.Exec(`
+		CREATE TABLE decisions_next (
+			id INTEGER PRIMARY KEY,
+			meal_id INTEGER NOT NULL REFERENCES meals(id) ON DELETE CASCADE,
+			dish_id TEXT NOT NULL REFERENCES catalog_dishes(source_path),
+			mode TEXT NOT NULL CHECK (mode IN ('pool', 'discovery')),
+			reason TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL CHECK (status IN ('active', 'accepted')),
+			rerolled_to_id INTEGER REFERENCES decisions_next(id),
+			created_at INTEGER NOT NULL
+		);
+	`); err != nil {
+		return err
+	}
+	if hasReason {
+		_, err = transaction.Exec(`
+			INSERT INTO decisions_next (
+				id, meal_id, dish_id, mode, reason, status, rerolled_to_id, created_at
+			)
+			SELECT id, meal_id, dish_id, mode, reason, status, rerolled_to_id, created_at
+			FROM decisions;
+		`)
+	} else {
+		_, err = transaction.Exec(`
+			INSERT INTO decisions_next (
+				id, meal_id, dish_id, mode, reason, status, rerolled_to_id, created_at
+			)
+			SELECT id, meal_id, dish_id, mode, '', status, rerolled_to_id, created_at
+			FROM decisions;
+		`)
+	}
+	if err != nil {
+		return err
+	}
+	if _, err := transaction.Exec(`
+		DROP TABLE decisions;
+		ALTER TABLE decisions_next RENAME TO decisions;
+		CREATE UNIQUE INDEX one_active_decision_per_meal
+			ON decisions(meal_id)
+			WHERE status = 'active' AND rerolled_to_id IS NULL;
+	`); err != nil {
+		return err
+	}
+	if err := transaction.Commit(); err != nil {
+		return err
+	}
+	if _, err := db.Exec("PRAGMA foreign_keys = ON"); err != nil {
+		return err
+	}
+	foreignKeysDisabled = false
+	rows, err := db.Query("PRAGMA foreign_key_check")
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	if rows.Next() {
+		return errors.New("Discovery migration left invalid foreign keys")
+	}
+	return rows.Err()
 }

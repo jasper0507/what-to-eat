@@ -53,7 +53,8 @@ type CandidateDish = Dish & {
 type MealDecision = {
   id: number;
   meal_id: number;
-  mode: "pool";
+  mode: "pool" | "discovery";
+  reason?: string;
   dish: Dish;
 };
 
@@ -324,7 +325,16 @@ function HomePage({ account }: { account: Account }) {
           {resume?.status === "active_decision" && (
             <section className="decision" aria-labelledby="decision-heading">
               <Space direction="vertical" size={20} className="full-width">
-                <Tag color="orange">普通 Pool pick</Tag>
+                {resume.decision.mode === "discovery" ? (
+                  <>
+                    <Tag color="blue">Discovery · 候选池外探索</Tag>
+                    {resume.decision.reason && (
+                      <Alert type="info" showIcon message={resume.decision.reason} />
+                    )}
+                  </>
+                ) : (
+                  <Tag color="orange">普通 Pool pick</Tag>
+                )}
                 <div>
                   <Typography.Text type="secondary">{resume.decision.dish.category}</Typography.Text>
                   <Typography.Title id="decision-heading" level={2}>

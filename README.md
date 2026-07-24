@@ -29,6 +29,12 @@ CATALOG_DIR=/path/to/HowToCook/dishes go run ./cmd/server
 
 再次使用相同 `CATALOG_DIR` 启动即可安全重跑导入。未设置时服务使用数据库中已有的 Catalog。
 
+## Discovery 触发条件
+
+Discovery pressure 的三个透明信号分别是 Candidate pool 不超过 3 道、完整 Cooldown 后不超过 1 道可选，以及当前或最近 3 个已接受 Meal 中至少 2 次 Reroll。默认满足其中 2 项即触发，每个 Meal 最多展示 2 个 Discovery。
+
+嵌入应用时可从 `server.DefaultDiscoveryConfig()` 取得默认值，通过 `server.Config.Discovery` 调整阈值或关闭 Discovery。
+
 ## 单节点运行
 
 ```bash

@@ -28,6 +28,7 @@ func openCatalogAppWithDecisionSeed(
 	config := server.Config{
 		DatabasePath: databasePath,
 		CatalogDir:   filepath.Join("testdata", "catalog"),
+		Discovery:    &server.DiscoveryConfig{Enabled: false},
 	}
 	var app *server.App
 	var err error
@@ -196,6 +197,50 @@ func TestCatalogImportUpgradesLegacyCatalogSchema(t *testing.T) {
 	}
 	if len(result.Dishes) != 1 || result.Dishes[0].ID != "drink/柠檬水.md" {
 		t.Errorf("dishes = %#v, want migrated source path identity", result.Dishes)
+	}
+}
+
+func TestAppUpgradesPoolOnlyDecisionSchemaForDiscovery(t *testing.T) {
+	databasePath := filepath.Join(t.TempDir(), "what-to-eat.db")
+	db, err := sql.Open("sqlite", databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`
+		CREATE TABLE decisions (
+			id INTEGER PRIMARY KEY,
+			meal_id INTEGER NOT NULL REFERENCES meals(id) ON DELETE CASCADE,
+			dish_id TEXT NOT NULL REFERENCES catalog_dishes(source_path),
+			mode TEXT NOT NULL CHECK (mode = 'pool'),
+			status TEXT NOT NULL CHECK (status IN ('active', 'accepted')),
+			rerolled_to_id INTEGER REFERENCES decisions(id),
+			created_at INTEGER NOT NULL
+		);
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	discovery := server.DefaultDiscoveryConfig()
+	discovery.MaxPoolSize = 1
+	config := server.Config{
+		DatabasePath: databasePath,
+		CatalogDir:   filepath.Join("testdata", "catalog"),
+		Discovery:    &discovery,
+	}
+	app, err := server.NewWithDecisionRandomSeedForTest(config, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { app.Close() })
+	cookie := registerCandidateEater(t, app, "discovery_schema_eater")
+	addCandidatePoolDish(t, app, cookie, "vegetable_dish/番茄炒蛋.md", 5)
+
+	decision := beginMealDecision(t, app, cookie)
+	if decision.Mode != "discovery" {
+		t.Errorf("Decision after schema upgrade = %#v, want Discovery mode to be accepted", decision)
 	}
 }
 

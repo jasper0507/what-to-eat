@@ -29,6 +29,7 @@ type Config struct {
 	SecureCookies bool
 	WebDir        string
 	CatalogDir    string
+	Discovery     *DiscoveryConfig
 }
 
 type App struct {
@@ -69,6 +70,10 @@ func New(config Config) (*App, error) {
 }
 
 func newApp(config Config, decisionRandom *mathrand.Rand) (*App, error) {
+	discovery, err := normalizeDiscoveryConfig(config.Discovery)
+	if err != nil {
+		return nil, fmt.Errorf("configure Discovery: %w", err)
+	}
 	db, err := sql.Open("sqlite", config.DatabasePath)
 	if err != nil {
 		return nil, err
@@ -113,7 +118,8 @@ func newApp(config Config, decisionRandom *mathrand.Rand) (*App, error) {
 			id INTEGER PRIMARY KEY,
 			meal_id INTEGER NOT NULL REFERENCES meals(id) ON DELETE CASCADE,
 			dish_id TEXT NOT NULL REFERENCES catalog_dishes(source_path),
-			mode TEXT NOT NULL CHECK (mode = 'pool'),
+			mode TEXT NOT NULL CHECK (mode IN ('pool', 'discovery')),
+			reason TEXT NOT NULL DEFAULT '',
 			status TEXT NOT NULL CHECK (status IN ('active', 'accepted')),
 			rerolled_to_id INTEGER REFERENCES decisions(id),
 			created_at INTEGER NOT NULL
@@ -140,6 +146,10 @@ func newApp(config Config, decisionRandom *mathrand.Rand) (*App, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate Reroll: %w", err)
 	}
+	if err := migrateDiscoverySchema(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate Discovery: %w", err)
+	}
 	if config.CatalogDir != "" {
 		if err := importCatalog(db, config.CatalogDir); err != nil {
 			db.Close()
@@ -158,7 +168,7 @@ func newApp(config Config, decisionRandom *mathrand.Rand) (*App, error) {
 		secureCookies:     config.SecureCookies,
 		dummyPasswordHash: dummyPasswordHash,
 		loginFailures:     make(map[string]loginFailureWindow),
-		mealLifecycle:     newMealLifecycle(db, decisionRandom),
+		mealLifecycle:     newMealLifecycle(db, decisionRandom, discovery),
 	}
 	app.routes(config.WebDir)
 	return app, nil
