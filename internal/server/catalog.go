@@ -1,10 +1,7 @@
 package server
 
 import (
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"io/fs"
 	"os"
@@ -22,7 +19,6 @@ var howToCookCategories = map[string]string{
 	"dessert":        "甜品",
 	"drink":          "饮料",
 	"meat_dish":      "荤菜",
-	"other":          "其他",
 	"semi-finished":  "半成品加工",
 	"soup":           "汤与粥",
 	"staple":         "主食",
@@ -37,13 +33,11 @@ func importCatalog(db *sql.DB, root string) error {
 	defer transaction.Rollback()
 
 	statement, err := transaction.Prepare(`
-		INSERT INTO catalog_dishes (id, source_path, name, category, recipe, tags)
-		VALUES (?, ?, ?, ?, ?, ?)
+		INSERT INTO catalog_dishes (source_path, name, recipe)
+		VALUES (?, ?, ?)
 		ON CONFLICT(source_path) DO UPDATE SET
 			name = excluded.name,
-			category = excluded.category,
-			recipe = excluded.recipe,
-			tags = excluded.tags
+			recipe = excluded.recipe
 	`)
 	if err != nil {
 		return err
@@ -86,24 +80,8 @@ func importCatalog(db *sql.DB, root string) error {
 			return err
 		}
 		relativePath = filepath.ToSlash(relativePath)
-		pathParts := strings.Split(relativePath, "/")
-		category := "其他"
-		tags := make([]string, 0)
-		if len(pathParts) > 1 {
-			category = howToCookCategories[pathParts[0]]
-			if category == "" {
-				category = pathParts[0]
-			}
-			tags = pathParts[1 : len(pathParts)-1]
-		}
-		tagsJSON, err := json.Marshal(tags)
-		if err != nil {
-			return err
-		}
-		hash := sha256.Sum256([]byte(relativePath))
-		id := "howtocook:" + hex.EncodeToString(hash[:])
 		name := strings.TrimSuffix(entry.Name(), filepath.Ext(entry.Name()))
-		if _, err := statement.Exec(id, relativePath, name, category, string(recipe), tagsJSON); err != nil {
+		if _, err := statement.Exec(relativePath, name, string(recipe)); err != nil {
 			return err
 		}
 		return nil

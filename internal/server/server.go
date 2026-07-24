@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -85,12 +84,9 @@ func New(config Config) (*App, error) {
 			expires_at INTEGER NOT NULL
 		);
 		CREATE TABLE IF NOT EXISTS catalog_dishes (
-			id TEXT PRIMARY KEY,
-			source_path TEXT NOT NULL UNIQUE,
+			source_path TEXT PRIMARY KEY,
 			name TEXT NOT NULL,
-			category TEXT NOT NULL,
-			recipe TEXT NOT NULL,
-			tags TEXT NOT NULL
+			recipe TEXT NOT NULL
 		);
 	`); err != nil {
 		db.Close()
@@ -360,7 +356,7 @@ func (a *App) searchCatalog(context *gin.Context) {
 
 	rows, err := a.db.QueryContext(
 		context,
-		`SELECT id, name, category, source_path, tags
+		`SELECT source_path, name, source_path
 		 FROM catalog_dishes
 		 WHERE instr(name, ?) > 0
 		 ORDER BY name
@@ -376,14 +372,20 @@ func (a *App) searchCatalog(context *gin.Context) {
 	dishes := make([]catalogDishResponse, 0)
 	for rows.Next() {
 		var dish catalogDishResponse
-		var tagsJSON string
-		if err := rows.Scan(&dish.ID, &dish.Name, &dish.Category, &dish.RecipePath, &tagsJSON); err != nil {
+		if err := rows.Scan(&dish.ID, &dish.Name, &dish.RecipePath); err != nil {
 			writeInternalError(context, "read Catalog search result", err)
 			return
 		}
-		if err := json.Unmarshal([]byte(tagsJSON), &dish.Tags); err != nil {
-			writeInternalError(context, "decode Catalog tags", err)
-			return
+		pathParts := strings.Split(dish.RecipePath, "/")
+		dish.Tags = []string{}
+		if len(pathParts) == 1 {
+			dish.Category = "其他"
+		} else {
+			dish.Category = howToCookCategories[pathParts[0]]
+			if dish.Category == "" {
+				dish.Category = pathParts[0]
+			}
+			dish.Tags = pathParts[1 : len(pathParts)-1]
 		}
 		dishes = append(dishes, dish)
 	}

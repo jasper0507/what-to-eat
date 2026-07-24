@@ -38,10 +38,6 @@ type Dish = {
   tags: string[];
 };
 
-type CatalogResponse = {
-  dishes: Dish[];
-};
-
 async function requestJSON<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     ...init,
@@ -58,10 +54,6 @@ async function requestJSON<T>(path: string, init?: RequestInit): Promise<T> {
   return body as T;
 }
 
-async function requestAccount(path: string, init?: RequestInit): Promise<Account> {
-  return (await requestJSON<AccountResponse>(path, init)).account;
-}
-
 function AuthPage({ onAuthenticated }: { onAuthenticated: (account: Account) => void }) {
   const [mode, setMode] = useState<"login" | "register">("login");
   const [submitting, setSubmitting] = useState(false);
@@ -71,7 +63,7 @@ function AuthPage({ onAuthenticated }: { onAuthenticated: (account: Account) => 
     setSubmitting(true);
     setError(undefined);
     try {
-      const account = await requestAccount(`/api/auth/${mode}`, {
+      const { account } = await requestJSON<AccountResponse>(`/api/auth/${mode}`, {
         method: "POST",
         body: JSON.stringify(values),
       });
@@ -170,8 +162,7 @@ function AuthPage({ onAuthenticated }: { onAuthenticated: (account: Account) => 
 }
 
 function CatalogPage({ account }: { account: Account }) {
-  const [dishes, setDishes] = useState<Dish[]>([]);
-  const [searched, setSearched] = useState(false);
+  const [dishes, setDishes] = useState<Dish[] | null>(null);
   const [searching, setSearching] = useState(false);
   const [error, setError] = useState<string>();
 
@@ -179,22 +170,19 @@ function CatalogPage({ account }: { account: Account }) {
     const query = value.trim();
     setError(undefined);
     if (!query) {
-      setDishes([]);
-      setSearched(false);
+      setDishes(null);
       setError("请输入要搜索的 Dish 名称");
       return;
     }
 
     setSearching(true);
     try {
-      const result = await requestJSON<CatalogResponse>(
+      const result = await requestJSON<{ dishes: Dish[] }>(
         `/api/catalog/dishes?q=${encodeURIComponent(query)}`,
       );
       setDishes(result.dishes);
-      setSearched(true);
     } catch (cause) {
-      setDishes([]);
-      setSearched(false);
+      setDishes(null);
       setError(cause instanceof Error ? cause.message : "Catalog 搜索失败，请稍后重试");
     } finally {
       setSearching(false);
@@ -206,13 +194,11 @@ function CatalogPage({ account }: { account: Account }) {
       <Card className="catalog-card" bordered={false}>
         <Space direction="vertical" size={24} className="full-width">
           <header className="catalog-header">
-            <div>
-              <Typography.Text type="secondary">你好，{account.username}</Typography.Text>
-              <Typography.Title level={1}>搜索想吃的 Dish</Typography.Title>
-              <Typography.Paragraph type="secondary">
-                从 HowToCook Catalog 中按名称查找，结果保留来源分类和稳定身份。
-              </Typography.Paragraph>
-            </div>
+            <Typography.Text type="secondary">你好，{account.username}</Typography.Text>
+            <Typography.Title level={1}>搜索想吃的 Dish</Typography.Title>
+            <Typography.Paragraph type="secondary">
+              从 HowToCook Catalog 中按名称查找，结果保留来源分类和稳定身份。
+            </Typography.Paragraph>
           </header>
 
           <Input.Search
@@ -228,15 +214,15 @@ function CatalogPage({ account }: { account: Account }) {
 
           {error && <Alert type="error" showIcon message={error} />}
 
-          {!searched && !error && (
+          {dishes === null && !error && (
             <Typography.Text type="secondary">输入名称后，Catalog 只会返回已有 Dish。</Typography.Text>
           )}
 
-          {searched && dishes.length === 0 && (
+          {dishes?.length === 0 && (
             <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Catalog 中没有匹配的 Dish" />
           )}
 
-          {dishes.length > 0 && (
+          {dishes && dishes.length > 0 && (
             <List
               aria-label="Catalog 搜索结果"
               dataSource={dishes}
