@@ -38,7 +38,6 @@ type App struct {
 	loginFailures     map[string]loginFailureWindow
 	loginFailuresMu   sync.Mutex
 	mealLifecycle     *mealLifecycle
-	webDir            string
 }
 
 type loginFailureWindow struct {
@@ -124,13 +123,12 @@ func New(config Config) (*App, error) {
 		dummyPasswordHash: dummyPasswordHash,
 		loginFailures:     make(map[string]loginFailureWindow),
 		mealLifecycle:     &mealLifecycle{db: db},
-		webDir:            config.WebDir,
 	}
-	app.routes()
+	app.routes(config.WebDir)
 	return app, nil
 }
 
-func (a *App) routes() {
+func (a *App) routes(webDir string) {
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
 	router.Use(gin.Recovery())
@@ -147,9 +145,9 @@ func (a *App) routes() {
 	router.DELETE("/api/candidate-pool/dishes", a.removeCandidatePoolDish)
 	router.GET("/api/meals/resume", a.resumeMeal)
 	router.POST("/api/meals", a.beginMeal)
-	if configWebDir := a.webDir; configWebDir != "" {
-		indexPath := filepath.Join(configWebDir, "index.html")
-		router.Static("/assets", filepath.Join(configWebDir, "assets"))
+	if webDir != "" {
+		indexPath := filepath.Join(webDir, "index.html")
+		router.Static("/assets", filepath.Join(webDir, "assets"))
 		router.GET("/", func(context *gin.Context) {
 			context.File(indexPath)
 		})
