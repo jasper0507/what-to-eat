@@ -421,3 +421,50 @@ func TestNIMAPIKeyRejectsInsecureRemoteEndpoint(t *testing.T) {
 		t.Errorf("New error = %q, want HTTPS requirement", err)
 	}
 }
+
+func TestNIMAPIKeyIsNotForwardedThroughRedirect(t *testing.T) {
+	redirectReached := false
+	redirectTarget := httptest.NewServer(http.HandlerFunc(func(
+		writer http.ResponseWriter,
+		request *http.Request,
+	) {
+		redirectReached = true
+		writer.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer redirectTarget.Close()
+	redirectSource := httptest.NewServer(http.HandlerFunc(func(
+		writer http.ResponseWriter,
+		request *http.Request,
+	) {
+		http.Redirect(writer, request, redirectTarget.URL, http.StatusTemporaryRedirect)
+	}))
+	defer redirectSource.Close()
+
+	app, err := server.New(server.Config{
+		DatabasePath: filepath.Join(t.TempDir(), "what-to-eat.db"),
+		NIM: &server.NIMConfig{
+			APIKey:  "must-not-follow-redirects",
+			BaseURL: redirectSource.URL,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { app.Close() })
+	sessionCookie := registerCandidateEater(t, app, "redirect_eater")
+
+	response := candidatePoolRequest(
+		t,
+		app,
+		http.MethodPost,
+		"/api/onboarding/interview/messages",
+		`{"message":"我喜欢番茄炒蛋"}`,
+		sessionCookie,
+	)
+	if response.Code != http.StatusServiceUnavailable {
+		t.Errorf("redirect status = %d, want %d", response.Code, http.StatusServiceUnavailable)
+	}
+	if redirectReached {
+		t.Error("NIM client followed a redirect with a server-side API key")
+	}
+}

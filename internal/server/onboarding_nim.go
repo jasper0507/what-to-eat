@@ -95,7 +95,12 @@ func newNIMAdapter(config *NIMConfig) (onboardingNIM, error) {
 		apiKey:   config.APIKey,
 		endpoint: strings.TrimRight(baseURL, "/") + "/chat/completions",
 		model:    model,
-		client:   &http.Client{Timeout: timeout},
+		client: &http.Client{
+			Timeout: timeout,
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		},
 	}, nil
 }
 
