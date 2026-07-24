@@ -181,11 +181,23 @@ function HomePage({ account }: { account: Account }) {
 
   useEffect(() => {
     requestJSON<MealResume>("/api/meals/resume")
-      .then(setResume)
+      .then((result) => {
+        if (
+          result.status === "candidate_pool_empty" &&
+          !result.actions.some((action) => action.kind === "catalog_search" && action.href)
+        ) {
+          throw new Error("Meal 状态缺少 Catalog 搜索入口");
+        }
+        setResume(result);
+      })
       .catch((cause) => {
         setError(cause instanceof Error ? cause.message : "无法恢复 Meal 状态");
       });
   }, []);
+
+  const catalogSearchAction = resume?.actions.find(
+    (action) => action.kind === "catalog_search",
+  );
 
   return (
     <main className="page-shell">
@@ -206,7 +218,7 @@ function HomePage({ account }: { account: Account }) {
             </div>
           )}
 
-          {resume?.status === "candidate_pool_empty" && (
+          {resume?.status === "candidate_pool_empty" && catalogSearchAction && (
             <>
               <Alert
                 type="warning"
@@ -214,7 +226,7 @@ function HomePage({ account }: { account: Account }) {
                 message="Candidate pool 为空"
                 description="当前无法创建 Decision。先从 Catalog 添加至少一个你愿意考虑的 Dish。"
               />
-              <Link to={resume.actions[0]?.href ?? "/candidate-pool"}>
+              <Link to={catalogSearchAction.href}>
                 <Button block type="primary" size="large">
                   搜索 Catalog 添加 Dish
                 </Button>
