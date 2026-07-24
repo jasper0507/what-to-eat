@@ -1,9 +1,7 @@
 package server_test
 
 import (
-	"bytes"
 	"encoding/json"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -14,60 +12,49 @@ import (
 	"github.com/jasper0507/what-to-eat/internal/server"
 )
 
-func TestEaterCanRegisterAccount(t *testing.T) {
+func newTestApp(t *testing.T, secureCookies bool) *server.App {
+	t.Helper()
 	app, err := server.New(server.Config{
-		DatabasePath: filepath.Join(t.TempDir(), "what-to-eat.db"),
+		DatabasePath:  filepath.Join(t.TempDir(), "what-to-eat.db"),
+		SecureCookies: secureCookies,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { app.Close() })
+	return app
+}
 
-	body := bytes.NewBufferString(`{"username":"小明同学","password":"correct horse battery staple"}`)
-	request := httptest.NewRequest(http.MethodPost, "/api/auth/register", body)
-	request.Header.Set("Content-Type", "application/json")
+func doRequest(
+	t *testing.T,
+	app *server.App,
+	method string,
+	path string,
+	body string,
+	cookies ...*http.Cookie,
+) *httptest.ResponseRecorder {
+	t.Helper()
+	request := httptest.NewRequest(method, path, strings.NewReader(body))
+	if body != "" {
+		request.Header.Set("Content-Type", "application/json")
+	}
+	for _, cookie := range cookies {
+		request.AddCookie(cookie)
+	}
 	response := httptest.NewRecorder()
 	app.ServeHTTP(response, request)
-
-	if response.Code != http.StatusCreated {
-		t.Fatalf("status = %d, want %d", response.Code, http.StatusCreated)
-	}
-
-	var result struct {
-		Account struct {
-			ID       int64  `json:"id"`
-			Username string `json:"username"`
-		} `json:"account"`
-	}
-	if err := json.NewDecoder(response.Body).Decode(&result); err != nil {
-		t.Fatal(err)
-	}
-	if result.Account.ID == 0 {
-		t.Error("account id should be present")
-	}
-	if result.Account.Username != "小明同学" {
-		t.Errorf("username = %q, want %q", result.Account.Username, "小明同学")
-	}
+	return response
 }
 
 func TestRegistrationCreatesSecureRestorableSession(t *testing.T) {
-	app, err := server.New(server.Config{
-		DatabasePath:  filepath.Join(t.TempDir(), "what-to-eat.db"),
-		SecureCookies: true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { app.Close() })
-
-	registerRequest := httptest.NewRequest(
+	app := newTestApp(t, true)
+	registerResponse := doRequest(
+		t,
+		app,
 		http.MethodPost,
 		"/api/auth/register",
-		bytes.NewBufferString(`{"username":"mobile_eater","password":"correct horse battery staple"}`),
+		`{"username":"小明同学","password":"correct horse battery staple"}`,
 	)
-	registerRequest.Header.Set("Content-Type", "application/json")
-	registerResponse := httptest.NewRecorder()
-	app.ServeHTTP(registerResponse, registerRequest)
 	if registerResponse.Code != http.StatusCreated {
 		t.Fatalf("register status = %d, want %d", registerResponse.Code, http.StatusCreated)
 	}
@@ -90,15 +77,27 @@ func TestRegistrationCreatesSecureRestorableSession(t *testing.T) {
 			t.Errorf("register response contains secret %q", secret)
 		}
 	}
+	var registered struct {
+		Account struct {
+			ID       int64  `json:"id"`
+			Username string `json:"username"`
+		} `json:"account"`
+	}
+	if err := json.Unmarshal([]byte(registerBody), &registered); err != nil {
+		t.Fatal(err)
+	}
+	if registered.Account.ID == 0 || registered.Account.Username != "小明同学" {
+		t.Errorf("registered Account = %#v, want 小明同学 with a non-zero ID", registered.Account)
+	}
 
-	sessionRequest := httptest.NewRequest(http.MethodGet, "/api/auth/session", nil)
-	sessionRequest.AddCookie(sessionCookie)
-	sessionResponse := httptest.NewRecorder()
-	app.ServeHTTP(sessionResponse, sessionRequest)
-
+	sessionResponse := doRequest(t, app, http.MethodGet, "/api/auth/session", "", sessionCookie)
 	if sessionResponse.Code != http.StatusOK {
-		body, _ := io.ReadAll(sessionResponse.Body)
-		t.Fatalf("session status = %d, want %d; body = %s", sessionResponse.Code, http.StatusOK, body)
+		t.Fatalf(
+			"session status = %d, want %d; body = %s",
+			sessionResponse.Code,
+			http.StatusOK,
+			sessionResponse.Body,
+		)
 	}
 	var result struct {
 		Account struct {
@@ -108,41 +107,31 @@ func TestRegistrationCreatesSecureRestorableSession(t *testing.T) {
 	if err := json.NewDecoder(sessionResponse.Body).Decode(&result); err != nil {
 		t.Fatal(err)
 	}
-	if result.Account.Username != "mobile_eater" {
-		t.Errorf("username = %q, want mobile_eater", result.Account.Username)
+	if result.Account.Username != "小明同学" {
+		t.Errorf("username = %q, want 小明同学", result.Account.Username)
 	}
 }
 
 func TestEaterCanLogin(t *testing.T) {
-	app, err := server.New(server.Config{
-		DatabasePath: filepath.Join(t.TempDir(), "what-to-eat.db"),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { app.Close() })
-
-	registerRequest := httptest.NewRequest(
+	app := newTestApp(t, false)
+	registerResponse := doRequest(
+		t,
+		app,
 		http.MethodPost,
 		"/api/auth/register",
-		bytes.NewBufferString(`{"username":"returning_eater","password":"correct horse battery staple"}`),
+		`{"username":"returning_eater","password":"correct horse battery staple"}`,
 	)
-	registerRequest.Header.Set("Content-Type", "application/json")
-	registerResponse := httptest.NewRecorder()
-	app.ServeHTTP(registerResponse, registerRequest)
 	if registerResponse.Code != http.StatusCreated {
 		t.Fatalf("register status = %d, want %d", registerResponse.Code, http.StatusCreated)
 	}
 
-	loginRequest := httptest.NewRequest(
+	loginResponse := doRequest(
+		t,
+		app,
 		http.MethodPost,
 		"/api/auth/login",
-		bytes.NewBufferString(`{"username":"returning_eater","password":"correct horse battery staple"}`),
+		`{"username":"returning_eater","password":"correct horse battery staple"}`,
 	)
-	loginRequest.Header.Set("Content-Type", "application/json")
-	loginResponse := httptest.NewRecorder()
-	app.ServeHTTP(loginResponse, loginRequest)
-
 	if loginResponse.Code != http.StatusOK {
 		t.Fatalf("login status = %d, want %d; body = %s", loginResponse.Code, http.StatusOK, loginResponse.Body)
 	}
@@ -163,22 +152,14 @@ func TestEaterCanLogin(t *testing.T) {
 }
 
 func TestInvalidLoginIsNonDisclosingAndRateLimited(t *testing.T) {
-	app, err := server.New(server.Config{
-		DatabasePath: filepath.Join(t.TempDir(), "what-to-eat.db"),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { app.Close() })
-
-	registerRequest := httptest.NewRequest(
+	app := newTestApp(t, false)
+	registerResponse := doRequest(
+		t,
+		app,
 		http.MethodPost,
 		"/api/auth/register",
-		bytes.NewBufferString(`{"username":"known_eater","password":"correct horse battery staple"}`),
+		`{"username":"known_eater","password":"correct horse battery staple"}`,
 	)
-	registerRequest.Header.Set("Content-Type", "application/json")
-	registerResponse := httptest.NewRecorder()
-	app.ServeHTTP(registerResponse, registerRequest)
 	if registerResponse.Code != http.StatusCreated {
 		t.Fatalf("register status = %d, want %d", registerResponse.Code, http.StatusCreated)
 	}
@@ -189,11 +170,7 @@ func TestInvalidLoginIsNonDisclosingAndRateLimited(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		request := httptest.NewRequest(http.MethodPost, "/api/auth/login", bytes.NewReader(body))
-		request.Header.Set("Content-Type", "application/json")
-		response := httptest.NewRecorder()
-		app.ServeHTTP(response, request)
-		return response
+		return doRequest(t, app, http.MethodPost, "/api/auth/login", string(body))
 	}
 
 	wrongPassword := login("known_eater", "definitely wrong")
@@ -235,14 +212,7 @@ func TestInvalidLoginIsNonDisclosingAndRateLimited(t *testing.T) {
 }
 
 func TestAccountSessionIsRequiredAndIsolated(t *testing.T) {
-	app, err := server.New(server.Config{
-		DatabasePath: filepath.Join(t.TempDir(), "what-to-eat.db"),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { app.Close() })
-
+	app := newTestApp(t, false)
 	register := func(username string) (*http.Cookie, int64) {
 		t.Helper()
 		body, err := json.Marshal(map[string]string{
@@ -252,10 +222,7 @@ func TestAccountSessionIsRequiredAndIsolated(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		request := httptest.NewRequest(http.MethodPost, "/api/auth/register", bytes.NewReader(body))
-		request.Header.Set("Content-Type", "application/json")
-		response := httptest.NewRecorder()
-		app.ServeHTTP(response, request)
+		response := doRequest(t, app, http.MethodPost, "/api/auth/register", string(body))
 		if response.Code != http.StatusCreated {
 			t.Fatalf("register %q status = %d, want %d", username, response.Code, http.StatusCreated)
 		}
@@ -273,9 +240,7 @@ func TestAccountSessionIsRequiredAndIsolated(t *testing.T) {
 	firstCookie, firstID := register("first_eater")
 	secondCookie, _ := register("second_eater")
 
-	unauthenticatedRequest := httptest.NewRequest(http.MethodGet, "/api/auth/session", nil)
-	unauthenticatedResponse := httptest.NewRecorder()
-	app.ServeHTTP(unauthenticatedResponse, unauthenticatedRequest)
+	unauthenticatedResponse := doRequest(t, app, http.MethodGet, "/api/auth/session", "")
 	if unauthenticatedResponse.Code != http.StatusUnauthorized {
 		t.Errorf(
 			"unauthenticated status = %d, want %d",
@@ -284,14 +249,14 @@ func TestAccountSessionIsRequiredAndIsolated(t *testing.T) {
 		)
 	}
 
-	secondRequest := httptest.NewRequest(
+	secondResponse := doRequest(
+		t,
+		app,
 		http.MethodGet,
 		"/api/auth/session?account_id="+strconv.FormatInt(firstID, 10),
-		nil,
+		"",
+		secondCookie,
 	)
-	secondRequest.AddCookie(secondCookie)
-	secondResponse := httptest.NewRecorder()
-	app.ServeHTTP(secondResponse, secondRequest)
 	if secondResponse.Code != http.StatusOK {
 		t.Fatalf("second Account status = %d, want %d", secondResponse.Code, http.StatusOK)
 	}
@@ -307,31 +272,17 @@ func TestAccountSessionIsRequiredAndIsolated(t *testing.T) {
 		t.Errorf("session resolved username = %q, want second_eater", result.Account.Username)
 	}
 
-	firstRequest := httptest.NewRequest(http.MethodGet, "/api/auth/session", nil)
-	firstRequest.AddCookie(firstCookie)
-	firstResponse := httptest.NewRecorder()
-	app.ServeHTTP(firstResponse, firstRequest)
+	firstResponse := doRequest(t, app, http.MethodGet, "/api/auth/session", "", firstCookie)
 	if firstResponse.Code != http.StatusOK {
 		t.Fatalf("first Account status = %d, want %d", firstResponse.Code, http.StatusOK)
 	}
 }
 
 func TestRegistrationRejectsInvalidAndDuplicateCredentialsWithoutLeaks(t *testing.T) {
-	app, err := server.New(server.Config{
-		DatabasePath: filepath.Join(t.TempDir(), "what-to-eat.db"),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { app.Close() })
-
+	app := newTestApp(t, false)
 	register := func(body string) *httptest.ResponseRecorder {
 		t.Helper()
-		request := httptest.NewRequest(http.MethodPost, "/api/auth/register", strings.NewReader(body))
-		request.Header.Set("Content-Type", "application/json")
-		response := httptest.NewRecorder()
-		app.ServeHTTP(response, request)
-		return response
+		return doRequest(t, app, http.MethodPost, "/api/auth/register", body)
 	}
 
 	shortUsername := register(`{"username":"ab","password":"long enough password"}`)
@@ -374,18 +325,8 @@ func TestRegistrationRejectsInvalidAndDuplicateCredentialsWithoutLeaks(t *testin
 }
 
 func TestHealthEndpoint(t *testing.T) {
-	app, err := server.New(server.Config{
-		DatabasePath: filepath.Join(t.TempDir(), "what-to-eat.db"),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { app.Close() })
-
-	request := httptest.NewRequest(http.MethodGet, "/api/healthz", nil)
-	response := httptest.NewRecorder()
-	app.ServeHTTP(response, request)
-
+	app := newTestApp(t, false)
+	response := doRequest(t, app, http.MethodGet, "/api/healthz", "")
 	if response.Code != http.StatusOK || response.Body.String() != `{"status":"ok"}` {
 		t.Errorf("health response = (%d, %q), want (200, %q)", response.Code, response.Body, `{"status":"ok"}`)
 	}
