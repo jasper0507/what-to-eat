@@ -37,6 +37,7 @@ type App struct {
 	dummyPasswordHash []byte
 	loginFailures     map[string]loginFailureWindow
 	loginFailuresMu   sync.Mutex
+	mealLifecycle     *mealLifecycle
 	webDir            string
 }
 
@@ -88,6 +89,14 @@ func New(config Config) (*App, error) {
 			name TEXT NOT NULL,
 			recipe TEXT NOT NULL
 		);
+		CREATE TABLE IF NOT EXISTS candidate_pool (
+			account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+			dish_id TEXT NOT NULL REFERENCES catalog_dishes(source_path) ON DELETE CASCADE,
+			preference_weight REAL NOT NULL CHECK (
+				preference_weight >= 0.1 AND preference_weight <= 5
+			),
+			PRIMARY KEY (account_id, dish_id)
+		);
 	`); err != nil {
 		db.Close()
 		return nil, err
@@ -114,6 +123,7 @@ func New(config Config) (*App, error) {
 		secureCookies:     config.SecureCookies,
 		dummyPasswordHash: dummyPasswordHash,
 		loginFailures:     make(map[string]loginFailureWindow),
+		mealLifecycle:     &mealLifecycle{db: db},
 		webDir:            config.WebDir,
 	}
 	app.routes()
@@ -131,6 +141,12 @@ func (a *App) routes() {
 	router.POST("/api/auth/login", a.login)
 	router.GET("/api/auth/session", a.session)
 	router.GET("/api/catalog/dishes", a.searchCatalog)
+	router.GET("/api/candidate-pool/dishes", a.listCandidatePool)
+	router.POST("/api/candidate-pool/dishes", a.addCandidatePoolDish)
+	router.PATCH("/api/candidate-pool/dishes", a.updateCandidatePoolDish)
+	router.DELETE("/api/candidate-pool/dishes", a.removeCandidatePoolDish)
+	router.GET("/api/meals/resume", a.resumeMeal)
+	router.POST("/api/meals", a.beginMeal)
 	if configWebDir := a.webDir; configWebDir != "" {
 		indexPath := filepath.Join(configWebDir, "index.html")
 		router.Static("/assets", filepath.Join(configWebDir, "assets"))
@@ -360,7 +376,7 @@ func (a *App) searchCatalog(context *gin.Context) {
 
 	rows, err := a.db.QueryContext(
 		context,
-		`SELECT source_path, name, source_path
+		`SELECT source_path, name
 		 FROM catalog_dishes
 		 WHERE instr(name, ?) > 0
 		 ORDER BY name
@@ -375,23 +391,12 @@ func (a *App) searchCatalog(context *gin.Context) {
 
 	dishes := make([]catalogDishResponse, 0)
 	for rows.Next() {
-		var dish catalogDishResponse
-		if err := rows.Scan(&dish.ID, &dish.Name, &dish.RecipePath); err != nil {
+		var sourcePath, name string
+		if err := rows.Scan(&sourcePath, &name); err != nil {
 			writeInternalError(context, "read Catalog search result", err)
 			return
 		}
-		pathParts := strings.Split(dish.RecipePath, "/")
-		dish.Tags = []string{}
-		if len(pathParts) == 1 {
-			dish.Category = "其他"
-		} else {
-			dish.Category = howToCookCategories[pathParts[0]]
-			if dish.Category == "" {
-				dish.Category = pathParts[0]
-			}
-			dish.Tags = pathParts[1 : len(pathParts)-1]
-		}
-		dishes = append(dishes, dish)
+		dishes = append(dishes, catalogDish(sourcePath, name))
 	}
 	if err := rows.Err(); err != nil {
 		writeInternalError(context, "finish Catalog search", err)

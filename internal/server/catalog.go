@@ -25,6 +25,26 @@ var howToCookCategories = map[string]string{
 	"vegetable_dish": "素菜",
 }
 
+func catalogDish(sourcePath, name string) catalogDishResponse {
+	dish := catalogDishResponse{
+		ID:         sourcePath,
+		Name:       name,
+		RecipePath: sourcePath,
+		Tags:       []string{},
+	}
+	pathParts := strings.Split(sourcePath, "/")
+	if len(pathParts) == 1 {
+		dish.Category = "其他"
+		return dish
+	}
+	dish.Category = howToCookCategories[pathParts[0]]
+	if dish.Category == "" {
+		dish.Category = pathParts[0]
+	}
+	dish.Tags = pathParts[1 : len(pathParts)-1]
+	return dish
+}
+
 func migrateLegacyCatalogSchema(db *sql.DB) error {
 	var legacyColumns int
 	if err := db.QueryRow(`

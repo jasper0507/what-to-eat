@@ -20,7 +20,7 @@ body {
 }
 
 .auth-shell,
-.catalog-shell,
+.page-shell,
 .centered-state {
   display: grid;
   min-height: 100vh;
@@ -33,9 +33,13 @@ body {
   box-shadow: 0 24px 70px rgb(105 58 30 / 14%);
 }
 
-.catalog-card {
-  width: min(100%, 760px);
+.page-card {
+  width: min(100%, 780px);
   box-shadow: 0 24px 70px rgb(105 58 30 / 14%);
+}
+
+.pool-card {
+  width: min(100%, 960px);
 }
 
 .auth-card h1 {
@@ -44,14 +48,51 @@ body {
   line-height: 1.08;
 }
 
-.catalog-header h1 {
+.page-header h1 {
   margin-block: 8px;
   font-size: clamp(2rem, 6vw, 3rem);
   line-height: 1.08;
 }
 
-.catalog-header p {
+.page-header p {
   margin-bottom: 0;
+}
+
+.page-header-row,
+.catalog-result,
+.pool-item {
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+}
+
+.catalog-result,
+.pool-item {
+  align-items: center;
+  width: 100%;
+}
+
+.pool-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 280px) auto;
+}
+
+.pool-item p {
+  margin-block: 6px 0;
+}
+
+.weight-control {
+  min-width: 0;
+}
+
+.weight-control .ant-slider {
+  margin-bottom: 0;
+}
+
+.inline-loading {
+  display: grid;
+  min-height: 96px;
+  place-items: center;
 }
 
 .recipe-path {
@@ -70,7 +111,7 @@ body {
 
 @media (max-width: 560px) {
   .auth-shell,
-  .catalog-shell,
+  .page-shell,
   .centered-state {
     align-items: start;
     padding: 20px 16px;
@@ -80,7 +121,23 @@ body {
     margin-top: 7vh;
   }
 
-  .catalog-card {
+  .page-card {
     margin-top: 2vh;
+  }
+
+  .page-header-row,
+  .catalog-result {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .pool-item {
+    align-items: stretch;
+    grid-template-columns: 1fr;
+  }
+
+  .catalog-result .ant-btn,
+  .pool-item .ant-btn {
+    width: 100%;
   }
 }

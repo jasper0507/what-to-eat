@@ -8,12 +8,13 @@ import {
   Input,
   List,
   Segmented,
+  Slider,
   Space,
   Spin,
   Tag,
   Typography,
 } from "antd";
-import { Navigate, Route, Routes } from "react-router-dom";
+import { Link, Navigate, Route, Routes } from "react-router-dom";
 
 type Account = {
   id: number;
@@ -38,6 +39,18 @@ type Dish = {
   tags: string[];
 };
 
+type CandidateDish = Dish & {
+  preference_weight: number;
+};
+
+type MealResume = {
+  status: "candidate_pool_empty" | "ready";
+  actions: Array<{
+    kind: string;
+    href: string;
+  }>;
+};
+
 async function requestJSON<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     ...init,
@@ -46,7 +59,8 @@ async function requestJSON<T>(path: string, init?: RequestInit): Promise<T> {
       ...init?.headers,
     },
   });
-  const body = (await response.json()) as T | ErrorResponse;
+  const body =
+    response.status === 204 ? undefined : ((await response.json()) as T | ErrorResponse);
   if (!response.ok) {
     const error = body as ErrorResponse;
     throw new Error(error.error?.message ?? "服务暂时不可用，请稍后重试");
@@ -161,17 +175,104 @@ function AuthPage({ onAuthenticated }: { onAuthenticated: (account: Account) => 
   );
 }
 
-function CatalogPage({ account }: { account: Account }) {
-  const [dishes, setDishes] = useState<Dish[] | null>(null);
-  const [searching, setSearching] = useState(false);
+function HomePage({ account }: { account: Account }) {
+  const [resume, setResume] = useState<MealResume>();
   const [error, setError] = useState<string>();
+
+  useEffect(() => {
+    requestJSON<MealResume>("/api/meals/resume")
+      .then(setResume)
+      .catch((cause) => {
+        setError(cause instanceof Error ? cause.message : "无法恢复 Meal 状态");
+      });
+  }, []);
+
+  return (
+    <main className="page-shell">
+      <Card className="page-card" bordered={false}>
+        <Space direction="vertical" size={24} className="full-width">
+          <header className="page-header">
+            <Typography.Text type="secondary">你好，{account.username}</Typography.Text>
+            <Typography.Title level={1}>准备好决定这一顿了吗？</Typography.Title>
+            <Typography.Paragraph type="secondary">
+              Meal readiness 来自你的真实 Candidate pool，不会从 Catalog 隐藏兜底。
+            </Typography.Paragraph>
+          </header>
+
+          {error && <Alert type="error" showIcon message={error} />}
+          {!resume && !error && (
+            <div className="inline-loading" aria-label="正在恢复 Meal 状态">
+              <Spin />
+            </div>
+          )}
+
+          {resume?.status === "candidate_pool_empty" && (
+            <>
+              <Alert
+                type="warning"
+                showIcon
+                message="Candidate pool 为空"
+                description="当前无法创建 Decision。先从 Catalog 添加至少一个你愿意考虑的 Dish。"
+              />
+              <Link to={resume.actions[0]?.href ?? "/candidate-pool"}>
+                <Button block type="primary" size="large">
+                  搜索 Catalog 添加 Dish
+                </Button>
+              </Link>
+            </>
+          )}
+
+          {resume?.status === "ready" && (
+            <>
+              <Alert
+                type="success"
+                showIcon
+                message="Meal 已就绪"
+                description="Candidate pool 中已有可用于下一次 Decision 的 Dish。"
+              />
+              <Link to="/candidate-pool">
+                <Button block type="primary" size="large">
+                  管理 Candidate pool
+                </Button>
+              </Link>
+            </>
+          )}
+        </Space>
+      </Card>
+    </main>
+  );
+}
+
+function CandidatePoolPage({ account }: { account: Account }) {
+  const [pool, setPool] = useState<CandidateDish[]>();
+  const [catalogDishes, setCatalogDishes] = useState<Dish[] | null>(null);
+  const [searching, setSearching] = useState(false);
+  const [busyDishID, setBusyDishID] = useState<string>();
+  const [poolError, setPoolError] = useState<string>();
+  const [searchError, setSearchError] = useState<string>();
+
+  async function loadPool() {
+    try {
+      const result = await requestJSON<{ dishes: CandidateDish[] }>(
+        "/api/candidate-pool/dishes",
+      );
+      setPool(result.dishes);
+      setPoolError(undefined);
+    } catch (cause) {
+      setPoolError(cause instanceof Error ? cause.message : "无法读取 Candidate pool");
+    }
+  }
+
+  useEffect(() => {
+    void loadPool();
+  }, []);
 
   async function search(value: string) {
     const query = value.trim();
-    setError(undefined);
+    setSearchError(undefined);
     if (!query) {
-      setDishes(null);
-      setError("请输入要搜索的 Dish 名称");
+      setCatalogDishes(null);
+      setSearchError("请输入要搜索的 Dish 名称");
       return;
     }
 
@@ -180,26 +281,175 @@ function CatalogPage({ account }: { account: Account }) {
       const result = await requestJSON<{ dishes: Dish[] }>(
         `/api/catalog/dishes?q=${encodeURIComponent(query)}`,
       );
-      setDishes(result.dishes);
+      setCatalogDishes(result.dishes);
     } catch (cause) {
-      setDishes(null);
-      setError(cause instanceof Error ? cause.message : "Catalog 搜索失败，请稍后重试");
+      setCatalogDishes(null);
+      setSearchError(
+        cause instanceof Error ? cause.message : "Catalog 搜索失败，请稍后重试",
+      );
     } finally {
       setSearching(false);
     }
   }
 
+  async function addDish(dishID: string) {
+    setBusyDishID(dishID);
+    setPoolError(undefined);
+    try {
+      const result = await requestJSON<{ dish: CandidateDish }>(
+        "/api/candidate-pool/dishes",
+        {
+          method: "POST",
+          body: JSON.stringify({ dish_id: dishID, preference_weight: 1 }),
+        },
+      );
+      setPool((current) =>
+        [...(current ?? []), result.dish].sort((left, right) =>
+          left.name.localeCompare(right.name, "zh-CN"),
+        ),
+      );
+    } catch (cause) {
+      setPoolError(cause instanceof Error ? cause.message : "无法加入 Candidate pool");
+    } finally {
+      setBusyDishID(undefined);
+    }
+  }
+
+  async function saveWeight(dishID: string, preferenceWeight: number) {
+    setBusyDishID(dishID);
+    setPoolError(undefined);
+    try {
+      const result = await requestJSON<{ dish: CandidateDish }>(
+        "/api/candidate-pool/dishes",
+        {
+          method: "PATCH",
+          body: JSON.stringify({
+            dish_id: dishID,
+            preference_weight: preferenceWeight,
+          }),
+        },
+      );
+      setPool((current) =>
+        current?.map((dish) => (dish.id === dishID ? result.dish : dish)),
+      );
+    } catch (cause) {
+      const message =
+        cause instanceof Error ? cause.message : "无法保存 Preference weight";
+      await loadPool();
+      setPoolError(message);
+    } finally {
+      setBusyDishID(undefined);
+    }
+  }
+
+  async function removeDish(dishID: string) {
+    setBusyDishID(dishID);
+    setPoolError(undefined);
+    try {
+      await requestJSON<void>(
+        `/api/candidate-pool/dishes?dish_id=${encodeURIComponent(dishID)}`,
+        { method: "DELETE" },
+      );
+      setPool((current) => current?.filter((dish) => dish.id !== dishID));
+    } catch (cause) {
+      setPoolError(cause instanceof Error ? cause.message : "无法移出 Candidate pool");
+    } finally {
+      setBusyDishID(undefined);
+    }
+  }
+
   return (
-    <main className="catalog-shell">
-      <Card className="catalog-card" bordered={false}>
+    <main className="page-shell">
+      <Card className="page-card pool-card" bordered={false}>
         <Space direction="vertical" size={24} className="full-width">
-          <header className="catalog-header">
-            <Typography.Text type="secondary">你好，{account.username}</Typography.Text>
-            <Typography.Title level={1}>搜索想吃的 Dish</Typography.Title>
+          <header className="page-header">
+            <div className="page-header-row">
+              <Typography.Text type="secondary">你好，{account.username}</Typography.Text>
+              <Link to="/">返回 Meal readiness</Link>
+            </div>
+            <Typography.Title level={1}>Candidate pool</Typography.Title>
             <Typography.Paragraph type="secondary">
-              从 HowToCook Catalog 中按名称查找，结果保留来源分类和稳定身份。
+              这里的 Dish 才会参与普通 Decision；Preference weight 越高，基础偏好越强。
             </Typography.Paragraph>
           </header>
+
+          {poolError && <Alert type="error" showIcon message={poolError} />}
+
+          {pool === undefined && !poolError && (
+            <div className="inline-loading" aria-label="正在读取 Candidate pool">
+              <Spin />
+            </div>
+          )}
+
+          {pool?.length === 0 && (
+            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Candidate pool 还是空的" />
+          )}
+
+          {pool && pool.length > 0 && (
+            <List
+              className="pool-list"
+              aria-label="Candidate pool"
+              dataSource={pool}
+              renderItem={(dish) => (
+                <List.Item key={dish.id}>
+                  <div className="pool-item">
+                    <div>
+                      <Space size={8} wrap>
+                        <Typography.Text strong>{dish.name}</Typography.Text>
+                        <Tag color="orange">{dish.category}</Tag>
+                      </Space>
+                      <Typography.Paragraph type="secondary" className="recipe-path">
+                        {dish.recipe_path}
+                      </Typography.Paragraph>
+                    </div>
+                    <div className="weight-control">
+                      <Typography.Text>
+                        Preference weight：{dish.preference_weight.toFixed(1)}
+                      </Typography.Text>
+                      <Slider
+                        aria-label={`${dish.name} Preference weight`}
+                        min={0.1}
+                        max={5}
+                        step={0.1}
+                        value={dish.preference_weight}
+                        disabled={busyDishID === dish.id}
+                        onChange={(value) => {
+                          setPool((current) =>
+                            current?.map((member) =>
+                              member.id === dish.id
+                                ? { ...member, preference_weight: value }
+                                : member,
+                            ),
+                          );
+                        }}
+                        onChangeComplete={(value) => {
+                          void saveWeight(dish.id, value);
+                        }}
+                      />
+                    </div>
+                    <Button
+                      danger
+                      loading={busyDishID === dish.id}
+                      onClick={() => {
+                        void removeDish(dish.id);
+                      }}
+                    >
+                      移出
+                    </Button>
+                  </div>
+                </List.Item>
+              )}
+            />
+          )}
+
+          <section aria-labelledby="catalog-search-heading">
+            <Typography.Title id="catalog-search-heading" level={2}>
+              从 Catalog 添加
+            </Typography.Title>
+            <Typography.Paragraph type="secondary">
+              按名称查找 HowToCook Dish，不会把自由文本创建成新 Dish。
+            </Typography.Paragraph>
+          </section>
 
           <Input.Search
             aria-label="按名称搜索 Dish"
@@ -212,38 +462,50 @@ function CatalogPage({ account }: { account: Account }) {
             onSearch={search}
           />
 
-          {error && <Alert type="error" showIcon message={error} />}
+          {searchError && <Alert type="error" showIcon message={searchError} />}
 
-          {dishes === null && !error && (
+          {catalogDishes === null && !searchError && (
             <Typography.Text type="secondary">输入名称后，Catalog 只会返回已有 Dish。</Typography.Text>
           )}
 
-          {dishes?.length === 0 && (
+          {catalogDishes?.length === 0 && (
             <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Catalog 中没有匹配的 Dish" />
           )}
 
-          {dishes && dishes.length > 0 && (
+          {catalogDishes && catalogDishes.length > 0 && (
             <List
               aria-label="Catalog 搜索结果"
-              dataSource={dishes}
+              dataSource={catalogDishes}
               renderItem={(dish) => (
                 <List.Item key={dish.id}>
-                  <List.Item.Meta
-                    title={
-                      <Space size={8} wrap>
-                        <Typography.Text strong>{dish.name}</Typography.Text>
-                        <Tag color="orange">{dish.category}</Tag>
-                        {dish.tags.map((tag) => (
-                          <Tag key={tag}>{tag}</Tag>
-                        ))}
-                      </Space>
-                    }
-                    description={
-                      <Typography.Text type="secondary" className="recipe-path">
-                        {dish.recipe_path}
-                      </Typography.Text>
-                    }
-                  />
+                  <div className="catalog-result">
+                    <List.Item.Meta
+                      title={
+                        <Space size={8} wrap>
+                          <Typography.Text strong>{dish.name}</Typography.Text>
+                          <Tag color="orange">{dish.category}</Tag>
+                          {dish.tags.map((tag) => (
+                            <Tag key={tag}>{tag}</Tag>
+                          ))}
+                        </Space>
+                      }
+                      description={
+                        <Typography.Text type="secondary" className="recipe-path">
+                          {dish.recipe_path}
+                        </Typography.Text>
+                      }
+                    />
+                    <Button
+                      type="primary"
+                      disabled={pool?.some((member) => member.id === dish.id)}
+                      loading={busyDishID === dish.id}
+                      onClick={() => {
+                        void addDish(dish.id);
+                      }}
+                    >
+                      {pool?.some((member) => member.id === dish.id) ? "已加入" : "加入"}
+                    </Button>
+                  </div>
                 </List.Item>
               )}
             />
@@ -306,8 +568,14 @@ export function WhatToEatApp() {
         }
       />
       <Route
+        path="/candidate-pool"
+        element={
+          account ? <CandidatePoolPage account={account} /> : <Navigate to="/login" replace />
+        }
+      />
+      <Route
         path="*"
-        element={account ? <CatalogPage account={account} /> : <Navigate to="/login" replace />}
+        element={account ? <HomePage account={account} /> : <Navigate to="/login" replace />}
       />
     </Routes>
   );
