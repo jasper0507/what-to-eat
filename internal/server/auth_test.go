@@ -217,8 +217,16 @@ func TestInvalidLoginIsNonDisclosingAndRateLimited(t *testing.T) {
 		t.Error("invalid login must not issue a session cookie")
 	}
 
-	for range 3 {
+	for range 2 {
 		login("unknown_eater", "definitely wrong")
+	}
+	successfulLogin := login("known_eater", "correct horse battery staple")
+	if successfulLogin.Code != http.StatusOK {
+		t.Fatalf("successful login status = %d, want %d", successfulLogin.Code, http.StatusOK)
+	}
+	fifthFailure := login("unknown_eater", "definitely wrong")
+	if fifthFailure.Code != http.StatusUnauthorized {
+		t.Fatalf("fifth invalid login status = %d, want %d", fifthFailure.Code, http.StatusUnauthorized)
 	}
 	rateLimited := login("known_eater", "definitely wrong")
 	if rateLimited.Code != http.StatusTooManyRequests {

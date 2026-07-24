@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"errors"
+	"log"
 	"net"
 	"net/http"
 	"path/filepath"
@@ -17,7 +18,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/bcrypt"
-	_ "modernc.org/sqlite"
+	sqliteDriver "modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
 )
 
 type Config struct {
@@ -143,7 +145,7 @@ func (a *App) register(context *gin.Context) {
 
 	transaction, err := a.db.BeginTx(context, nil)
 	if err != nil {
-		writeError(context, http.StatusInternalServerError, "internal_error", "服务暂时不可用")
+		writeInternalError(context, "begin registration transaction", err)
 		return
 	}
 	defer transaction.Rollback()
@@ -156,18 +158,22 @@ func (a *App) register(context *gin.Context) {
 		string(hash),
 	)
 	if err != nil {
-		writeError(context, http.StatusConflict, "account_unavailable", "无法创建 Account")
+		if isUniqueConstraint(err) {
+			writeError(context, http.StatusConflict, "account_unavailable", "无法创建 Account")
+		} else {
+			writeInternalError(context, "create Account", err)
+		}
 		return
 	}
 	id, err := result.LastInsertId()
 	if err != nil {
-		writeError(context, http.StatusInternalServerError, "internal_error", "服务暂时不可用")
+		writeInternalError(context, "read created Account ID", err)
 		return
 	}
 
 	token, tokenHash, expiresAt, err := newSession()
 	if err != nil {
-		writeError(context, http.StatusInternalServerError, "internal_error", "服务暂时不可用")
+		writeInternalError(context, "generate registration session", err)
 		return
 	}
 	if _, err := transaction.ExecContext(
@@ -177,11 +183,11 @@ func (a *App) register(context *gin.Context) {
 		id,
 		expiresAt.Unix(),
 	); err != nil {
-		writeError(context, http.StatusInternalServerError, "internal_error", "服务暂时不可用")
+		writeInternalError(context, "store registration session", err)
 		return
 	}
 	if err := transaction.Commit(); err != nil {
-		writeError(context, http.StatusInternalServerError, "internal_error", "服务暂时不可用")
+		writeInternalError(context, "commit registration", err)
 		return
 	}
 
@@ -216,7 +222,7 @@ func (a *App) login(context *gin.Context) {
 		passwordHash = []byte(storedHash)
 	case errors.Is(err, sql.ErrNoRows):
 	default:
-		writeError(context, http.StatusInternalServerError, "internal_error", "服务暂时不可用")
+		writeInternalError(context, "find Account for login", err)
 		return
 	}
 
@@ -225,11 +231,10 @@ func (a *App) login(context *gin.Context) {
 		writeError(context, http.StatusUnauthorized, "invalid_credentials", "用户名或密码错误")
 		return
 	}
-	a.clearLoginFailures(clientIP)
 
 	token, tokenHash, expiresAt, err := newSession()
 	if err != nil {
-		writeError(context, http.StatusInternalServerError, "internal_error", "服务暂时不可用")
+		writeInternalError(context, "generate login session", err)
 		return
 	}
 	if _, err := a.db.ExecContext(
@@ -239,7 +244,7 @@ func (a *App) login(context *gin.Context) {
 		account.ID,
 		expiresAt.Unix(),
 	); err != nil {
-		writeError(context, http.StatusInternalServerError, "internal_error", "服务暂时不可用")
+		writeInternalError(context, "store login session", err)
 		return
 	}
 
@@ -279,12 +284,6 @@ func (a *App) recordLoginFailure(clientIP string, now time.Time) {
 	a.loginFailures[clientIP] = window
 }
 
-func (a *App) clearLoginFailures(clientIP string) {
-	a.loginFailuresMu.Lock()
-	defer a.loginFailuresMu.Unlock()
-	delete(a.loginFailures, clientIP)
-}
-
 func (a *App) session(context *gin.Context) {
 	cookie, err := context.Cookie("what2eat_session")
 	if err != nil {
@@ -308,7 +307,7 @@ func (a *App) session(context *gin.Context) {
 		return
 	}
 	if err != nil {
-		writeError(context, http.StatusInternalServerError, "internal_error", "服务暂时不可用")
+		writeInternalError(context, "restore Account session", err)
 		return
 	}
 
@@ -363,4 +362,14 @@ func writeError(context *gin.Context, status int, code, message string) {
 			"message": message,
 		},
 	})
+}
+
+func writeInternalError(context *gin.Context, operation string, err error) {
+	log.Printf("%s: %v", operation, err)
+	writeError(context, http.StatusInternalServerError, "internal_error", "服务暂时不可用")
+}
+
+func isUniqueConstraint(err error) bool {
+	var sqliteError *sqliteDriver.Error
+	return errors.As(err, &sqliteError) && sqliteError.Code() == sqlite3.SQLITE_CONSTRAINT_UNIQUE
 }

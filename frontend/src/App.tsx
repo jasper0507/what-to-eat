@@ -116,14 +116,22 @@ function AuthPage({ onAuthenticated }: { onAuthenticated: (account: Account) => 
               name="password"
               rules={[
                 { required: true, message: "请输入密码" },
-                { min: 8, max: 72, message: "密码须为 8–72 个字符" },
+                {
+                  validator: async (_, value?: string) => {
+                    if (
+                      value &&
+                      ([...value].length < 8 || new TextEncoder().encode(value).length > 72)
+                    ) {
+                      throw new Error("密码须至少 8 个字符且不超过 72 字节");
+                    }
+                  },
+                },
               ]}
             >
               <Input.Password
                 size="large"
                 autoComplete={mode === "login" ? "current-password" : "new-password"}
-                maxLength={72}
-                placeholder="至少 8 个字符"
+                placeholder="至少 8 个字符，最多 72 字节"
               />
             </Form.Item>
             <Button
