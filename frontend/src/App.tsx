@@ -200,6 +200,7 @@ function HomePage({ account }: { account: Account }) {
   const [resume, setResume] = useState<MealResume>();
   const [error, setError] = useState<string>();
   const [submitting, setSubmitting] = useState(false);
+  const [rerolling, setRerolling] = useState(false);
   const navigate = useNavigate();
 
   async function loadMeal() {
@@ -241,6 +242,22 @@ function HomePage({ account }: { account: Account }) {
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "无法完成 Acceptance");
       setSubmitting(false);
+    }
+  }
+
+  async function rerollDecision(decisionID: number) {
+    setRerolling(true);
+    setError(undefined);
+    try {
+      setResume(
+        await requestJSON<MealResume>(`/api/decisions/${decisionID}/reroll`, {
+          method: "POST",
+        }),
+      );
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "无法 Reroll Decision");
+    } finally {
+      setRerolling(false);
     }
   }
 
@@ -318,8 +335,11 @@ function HomePage({ account }: { account: Account }) {
                   <Button
                     block
                     size="large"
-                    disabled
-                    title="Reroll 将在下一功能切片启用"
+                    loading={rerolling}
+                    disabled={submitting}
+                    onClick={() => {
+                      void rerollDecision(resume.decision.id);
+                    }}
                   >
                     Reroll
                   </Button>
@@ -328,6 +348,7 @@ function HomePage({ account }: { account: Account }) {
                     type="primary"
                     size="large"
                     loading={submitting}
+                    disabled={rerolling}
                     onClick={() => {
                       void acceptDecision(resume.decision.id);
                     }}

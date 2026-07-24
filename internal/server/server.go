@@ -110,10 +110,9 @@ func New(config Config) (*App, error) {
 			dish_id TEXT NOT NULL REFERENCES catalog_dishes(source_path),
 			mode TEXT NOT NULL CHECK (mode = 'pool'),
 			status TEXT NOT NULL CHECK (status IN ('active', 'accepted')),
+			rerolled_to_id INTEGER REFERENCES decisions(id),
 			created_at INTEGER NOT NULL
 		);
-		CREATE UNIQUE INDEX IF NOT EXISTS one_active_decision_per_meal
-			ON decisions(meal_id) WHERE status = 'active';
 		CREATE TABLE IF NOT EXISTS eating_records (
 			id INTEGER PRIMARY KEY,
 			account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
@@ -131,6 +130,10 @@ func New(config Config) (*App, error) {
 	if err := migrateLegacyCatalogSchema(db); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate Catalog: %w", err)
+	}
+	if err := migrateRerollSchema(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate Reroll: %w", err)
 	}
 	if config.CatalogDir != "" {
 		if err := importCatalog(db, config.CatalogDir); err != nil {
@@ -174,6 +177,7 @@ func (a *App) routes(webDir string) {
 	router.DELETE("/api/candidate-pool/dishes", a.removeCandidatePoolDish)
 	router.GET("/api/meals/resume", a.resumeMeal)
 	router.POST("/api/meals", a.beginMeal)
+	router.POST("/api/decisions/:decisionID/reroll", a.rerollDecision)
 	router.POST("/api/decisions/:decisionID/accept", a.acceptDecision)
 	if webDir != "" {
 		indexPath := filepath.Join(webDir, "index.html")

@@ -171,6 +171,198 @@ func TestBeginCreatesOnePoolDecisionAndResumeReturnsIt(t *testing.T) {
 	}
 }
 
+func TestRerollReplacesCurrentDecisionWithoutCreatingEatingRecord(t *testing.T) {
+	app := openCatalogApp(t, "")
+	t.Cleanup(func() { app.Close() })
+	sessionCookie := registerCatalogEater(t, app)
+
+	for _, body := range []string{
+		`{"dish_id":"vegetable_dish/番茄炒蛋.md","preference_weight":1}`,
+		`{"dish_id":"meat_dish/番茄牛腩.md","preference_weight":1}`,
+	} {
+		response := candidatePoolRequest(
+			t,
+			app,
+			http.MethodPost,
+			"/api/candidate-pool/dishes",
+			body,
+			sessionCookie,
+		)
+		if response.Code != http.StatusCreated {
+			t.Fatalf("add status = %d, want %d; body = %s", response.Code, http.StatusCreated, response.Body)
+		}
+	}
+
+	beginResponse := candidatePoolRequest(t, app, http.MethodPost, "/api/meals", "", sessionCookie)
+	if beginResponse.Code != http.StatusCreated {
+		t.Fatalf("Begin status = %d, want %d; body = %s", beginResponse.Code, http.StatusCreated, beginResponse.Body)
+	}
+	var begun mealState
+	if err := json.NewDecoder(beginResponse.Body).Decode(&begun); err != nil {
+		t.Fatal(err)
+	}
+
+	rerollPath := "/api/decisions/" + strconv.FormatInt(begun.Decision.ID, 10) + "/reroll"
+	var replacement mealState
+	for attempt := range 2 {
+		response := candidatePoolRequest(t, app, http.MethodPost, rerollPath, "", sessionCookie)
+		if response.Code != http.StatusOK {
+			t.Fatalf("Reroll attempt %d status = %d, want %d; body = %s", attempt+1, response.Code, http.StatusOK, response.Body)
+		}
+		var rerolled mealState
+		if err := json.NewDecoder(response.Body).Decode(&rerolled); err != nil {
+			t.Fatal(err)
+		}
+		if attempt == 0 {
+			replacement = rerolled
+		} else if !reflect.DeepEqual(rerolled, replacement) {
+			t.Errorf("repeated Reroll = %#v, want replacement %#v", rerolled, replacement)
+		}
+	}
+	if replacement.Status != "active_decision" ||
+		replacement.Decision.ID == begun.Decision.ID ||
+		replacement.Decision.MealID != begun.Decision.MealID ||
+		replacement.Decision.Dish.ID == begun.Decision.Dish.ID {
+		t.Fatalf("Reroll = %#v, want a different Decision for Meal %d", replacement, begun.Decision.MealID)
+	}
+
+	resumeResponse := candidatePoolRequest(t, app, http.MethodGet, "/api/meals/resume", "", sessionCookie)
+	if resumeResponse.Code != http.StatusOK {
+		t.Fatalf("Resume status = %d, want %d; body = %s", resumeResponse.Code, http.StatusOK, resumeResponse.Body)
+	}
+	var resumed mealState
+	if err := json.NewDecoder(resumeResponse.Body).Decode(&resumed); err != nil {
+		t.Fatal(err)
+	}
+	if resumed.Decision.ID != replacement.Decision.ID {
+		t.Errorf("Resume Decision = %d, want replacement %d", resumed.Decision.ID, replacement.Decision.ID)
+	}
+
+	rejectedAcceptance := candidatePoolRequest(
+		t,
+		app,
+		http.MethodPost,
+		"/api/decisions/"+strconv.FormatInt(begun.Decision.ID, 10)+"/accept",
+		"",
+		sessionCookie,
+	)
+	if rejectedAcceptance.Code != http.StatusNotFound {
+		t.Errorf("rejected Decision Acceptance status = %d, want %d", rejectedAcceptance.Code, http.StatusNotFound)
+	}
+
+	acceptedResponse := candidatePoolRequest(
+		t,
+		app,
+		http.MethodPost,
+		"/api/decisions/"+strconv.FormatInt(replacement.Decision.ID, 10)+"/accept",
+		"",
+		sessionCookie,
+	)
+	if acceptedResponse.Code != http.StatusOK {
+		t.Fatalf("replacement Acceptance status = %d, want %d; body = %s", acceptedResponse.Code, http.StatusOK, acceptedResponse.Body)
+	}
+	var accepted acceptanceResult
+	if err := json.NewDecoder(acceptedResponse.Body).Decode(&accepted); err != nil {
+		t.Fatal(err)
+	}
+	if accepted.EatingRecord.Sequence != 1 {
+		t.Errorf("Eating record sequence after Reroll = %d, want 1", accepted.EatingRecord.Sequence)
+	}
+}
+
+func TestConsecutiveRerollsExplorePoolAndRejectNonCurrentDecisions(t *testing.T) {
+	app := openCatalogApp(t, "")
+	t.Cleanup(func() { app.Close() })
+	ownerCookie := registerCandidateEater(t, app, "reroll_owner")
+	otherCookie := registerCandidateEater(t, app, "reroll_other")
+
+	for _, body := range []string{
+		`{"dish_id":"vegetable_dish/番茄炒蛋.md","preference_weight":1}`,
+		`{"dish_id":"meat_dish/番茄牛腩.md","preference_weight":1}`,
+		`{"dish_id":"drink/柠檬水.md","preference_weight":1}`,
+	} {
+		response := candidatePoolRequest(
+			t,
+			app,
+			http.MethodPost,
+			"/api/candidate-pool/dishes",
+			body,
+			ownerCookie,
+		)
+		if response.Code != http.StatusCreated {
+			t.Fatalf("add status = %d, want %d; body = %s", response.Code, http.StatusCreated, response.Body)
+		}
+	}
+
+	beginResponse := candidatePoolRequest(t, app, http.MethodPost, "/api/meals", "", ownerCookie)
+	if beginResponse.Code != http.StatusCreated {
+		t.Fatalf("Begin status = %d, want %d; body = %s", beginResponse.Code, http.StatusCreated, beginResponse.Body)
+	}
+	var current mealState
+	if err := json.NewDecoder(beginResponse.Body).Decode(&current); err != nil {
+		t.Fatal(err)
+	}
+	firstDecision := current.Decision
+	firstRerollPath := "/api/decisions/" + strconv.FormatInt(firstDecision.ID, 10) + "/reroll"
+	otherReroll := candidatePoolRequest(t, app, http.MethodPost, firstRerollPath, "", otherCookie)
+	if otherReroll.Code != http.StatusNotFound {
+		t.Errorf("other Account Reroll status = %d, want %d", otherReroll.Code, http.StatusNotFound)
+	}
+
+	shownDishIDs := map[string]bool{firstDecision.Dish.ID: true}
+	for range 2 {
+		response := candidatePoolRequest(
+			t,
+			app,
+			http.MethodPost,
+			"/api/decisions/"+strconv.FormatInt(current.Decision.ID, 10)+"/reroll",
+			"",
+			ownerCookie,
+		)
+		if response.Code != http.StatusOK {
+			t.Fatalf("Reroll status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body)
+		}
+		if err := json.NewDecoder(response.Body).Decode(&current); err != nil {
+			t.Fatal(err)
+		}
+		if shownDishIDs[current.Decision.Dish.ID] {
+			t.Fatalf("consecutive Reroll returned shown Dish %q before exploring pool", current.Decision.Dish.ID)
+		}
+		shownDishIDs[current.Decision.Dish.ID] = true
+	}
+	if len(shownDishIDs) != 3 {
+		t.Errorf("shown Dishes = %#v, want all three Candidate pool Dishes", shownDishIDs)
+	}
+
+	staleReroll := candidatePoolRequest(t, app, http.MethodPost, firstRerollPath, "", ownerCookie)
+	if staleReroll.Code != http.StatusNotFound {
+		t.Errorf("non-current Reroll status = %d, want %d", staleReroll.Code, http.StatusNotFound)
+	}
+
+	acceptResponse := candidatePoolRequest(
+		t,
+		app,
+		http.MethodPost,
+		"/api/decisions/"+strconv.FormatInt(current.Decision.ID, 10)+"/accept",
+		"",
+		ownerCookie,
+	)
+	if acceptResponse.Code != http.StatusOK {
+		t.Fatalf("Acceptance status = %d, want %d; body = %s", acceptResponse.Code, http.StatusOK, acceptResponse.Body)
+	}
+	acceptedReroll := candidatePoolRequest(
+		t,
+		app,
+		http.MethodPost,
+		"/api/decisions/"+strconv.FormatInt(current.Decision.ID, 10)+"/reroll",
+		"",
+		ownerCookie,
+	)
+	if acceptedReroll.Code != http.StatusNotFound {
+		t.Errorf("accepted Decision Reroll status = %d, want %d", acceptedReroll.Code, http.StatusNotFound)
+	}
+}
+
 func TestAcceptanceIsAccountScopedIdempotentAndOpensRecipe(t *testing.T) {
 	app := openCatalogApp(t, "")
 	t.Cleanup(func() { app.Close() })
