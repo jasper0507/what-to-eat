@@ -25,16 +25,6 @@ type mealLifecycle struct {
 
 type mealReadiness string
 
-type mealResumeResponse struct {
-	Status  mealReadiness        `json:"status"`
-	Actions []mealActionResponse `json:"actions"`
-}
-
-type mealActionResponse struct {
-	Kind string `json:"kind"`
-	Href string `json:"href"`
-}
-
 func (m *mealLifecycle) Resume(context context.Context, accountID int64) (mealReadiness, error) {
 	var hasCandidates bool
 	if err := m.db.QueryRowContext(
@@ -61,20 +51,6 @@ func (m *mealLifecycle) Begin(context context.Context, accountID int64) (mealRea
 	return readiness, errDecisionNotImplemented
 }
 
-func mealResumeHTTPResponse(readiness mealReadiness) mealResumeResponse {
-	response := mealResumeResponse{
-		Status:  readiness,
-		Actions: []mealActionResponse{},
-	}
-	if readiness == mealStatusCandidatePoolEmpty {
-		response.Actions = append(response.Actions, mealActionResponse{
-			Kind: "catalog_search",
-			Href: "/candidate-pool",
-		})
-	}
-	return response
-}
-
 func (a *App) resumeMeal(context *gin.Context) {
 	account, ok := a.currentAccount(context)
 	if !ok {
@@ -85,7 +61,7 @@ func (a *App) resumeMeal(context *gin.Context) {
 		writeInternalError(context, "resume Meal lifecycle", err)
 		return
 	}
-	context.JSON(http.StatusOK, mealResumeHTTPResponse(readiness))
+	context.JSON(http.StatusOK, gin.H{"status": readiness})
 }
 
 func (a *App) beginMeal(context *gin.Context) {
@@ -96,13 +72,12 @@ func (a *App) beginMeal(context *gin.Context) {
 	readiness, err := a.mealLifecycle.Begin(context, account.ID)
 	switch {
 	case errors.Is(err, errCandidatePoolEmpty):
-		context.JSON(http.StatusConflict, gin.H{
-			"error": gin.H{
-				"code":    mealStatusCandidatePoolEmpty,
-				"message": "Candidate pool 为空，无法创建 Decision",
-			},
-			"actions": mealResumeHTTPResponse(readiness).Actions,
-		})
+		writeError(
+			context,
+			http.StatusConflict,
+			string(readiness),
+			"Candidate pool 为空，无法创建 Decision",
+		)
 	case errors.Is(err, errDecisionNotImplemented):
 		writeError(context, http.StatusNotImplemented, "decision_not_implemented", "Decision 功能尚未开放")
 	case err != nil:

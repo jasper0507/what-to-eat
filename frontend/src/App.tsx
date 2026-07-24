@@ -45,10 +45,6 @@ type CandidateDish = Dish & {
 
 type MealResume = {
   status: "candidate_pool_empty" | "ready";
-  actions: Array<{
-    kind: string;
-    href: string;
-  }>;
 };
 
 async function requestJSON<T>(path: string, init?: RequestInit): Promise<T> {
@@ -59,11 +55,11 @@ async function requestJSON<T>(path: string, init?: RequestInit): Promise<T> {
       ...init?.headers,
     },
   });
-  const body =
-    response.status === 204 ? undefined : ((await response.json()) as T | ErrorResponse);
+  const text = await response.text();
+  const body = text ? (JSON.parse(text) as T | ErrorResponse) : undefined;
   if (!response.ok) {
-    const error = body as ErrorResponse;
-    throw new Error(error.error?.message ?? "服务暂时不可用，请稍后重试");
+    const error = body as ErrorResponse | undefined;
+    throw new Error(error?.error?.message ?? "服务暂时不可用，请稍后重试");
   }
   return body as T;
 }
@@ -181,23 +177,11 @@ function HomePage({ account }: { account: Account }) {
 
   useEffect(() => {
     requestJSON<MealResume>("/api/meals/resume")
-      .then((result) => {
-        if (
-          result.status === "candidate_pool_empty" &&
-          !result.actions.some((action) => action.kind === "catalog_search" && action.href)
-        ) {
-          throw new Error("Meal 状态缺少 Catalog 搜索入口");
-        }
-        setResume(result);
-      })
+      .then(setResume)
       .catch((cause) => {
         setError(cause instanceof Error ? cause.message : "无法恢复 Meal 状态");
       });
   }, []);
-
-  const catalogSearchAction = resume?.actions.find(
-    (action) => action.kind === "catalog_search",
-  );
 
   return (
     <main className="page-shell">
@@ -218,7 +202,7 @@ function HomePage({ account }: { account: Account }) {
             </div>
           )}
 
-          {resume?.status === "candidate_pool_empty" && catalogSearchAction && (
+          {resume?.status === "candidate_pool_empty" && (
             <>
               <Alert
                 type="warning"
@@ -226,7 +210,7 @@ function HomePage({ account }: { account: Account }) {
                 message="Candidate pool 为空"
                 description="当前无法创建 Decision。先从 Catalog 添加至少一个你愿意考虑的 Dish。"
               />
-              <Link to={catalogSearchAction.href}>
+              <Link to="/candidate-pool">
                 <Button block type="primary" size="large">
                   搜索 Catalog 添加 Dish
                 </Button>
@@ -304,19 +288,16 @@ function CandidatePoolPage({ account }: { account: Account }) {
     }
   }
 
-  async function addDish(dishID: string) {
-    setBusyDishID(dishID);
+  async function addDish(dish: Dish) {
+    setBusyDishID(dish.id);
     setPoolError(undefined);
     try {
-      const result = await requestJSON<{ dish: CandidateDish }>(
-        "/api/candidate-pool/dishes",
-        {
-          method: "POST",
-          body: JSON.stringify({ dish_id: dishID, preference_weight: 1 }),
-        },
-      );
+      await requestJSON<void>("/api/candidate-pool/dishes", {
+        method: "POST",
+        body: JSON.stringify({ dish_id: dish.id, preference_weight: 1 }),
+      });
       setPool((current) =>
-        [...(current ?? []), result.dish].sort((left, right) =>
+        [...(current ?? []), { ...dish, preference_weight: 1 }].sort((left, right) =>
           left.name.localeCompare(right.name, "zh-CN"),
         ),
       );
@@ -331,19 +312,13 @@ function CandidatePoolPage({ account }: { account: Account }) {
     setBusyDishID(dishID);
     setPoolError(undefined);
     try {
-      const result = await requestJSON<{ dish: CandidateDish }>(
-        "/api/candidate-pool/dishes",
-        {
-          method: "PATCH",
-          body: JSON.stringify({
-            dish_id: dishID,
-            preference_weight: preferenceWeight,
-          }),
-        },
-      );
-      setPool((current) =>
-        current?.map((dish) => (dish.id === dishID ? result.dish : dish)),
-      );
+      await requestJSON<void>("/api/candidate-pool/dishes", {
+        method: "PATCH",
+        body: JSON.stringify({
+          dish_id: dishID,
+          preference_weight: preferenceWeight,
+        }),
+      });
     } catch (cause) {
       const message =
         cause instanceof Error ? cause.message : "无法保存 Preference weight";
@@ -512,7 +487,7 @@ function CandidatePoolPage({ account }: { account: Account }) {
                       disabled={pool?.some((member) => member.id === dish.id)}
                       loading={busyDishID === dish.id}
                       onClick={() => {
-                        void addDish(dish.id);
+                        void addDish(dish);
                       }}
                     >
                       {pool?.some((member) => member.id === dish.id) ? "已加入" : "加入"}

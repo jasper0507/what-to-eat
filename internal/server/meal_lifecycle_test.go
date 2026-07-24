@@ -12,13 +12,7 @@ func TestResumeReflectsCandidatePoolReadiness(t *testing.T) {
 	t.Cleanup(func() { app.Close() })
 	sessionCookie := registerCatalogEater(t, app)
 
-	resume := func() struct {
-		Status  string `json:"status"`
-		Actions []struct {
-			Kind string `json:"kind"`
-			Href string `json:"href"`
-		} `json:"actions"`
-	} {
+	resume := func() string {
 		t.Helper()
 		response := candidatePoolRequest(
 			t,
@@ -31,25 +25,21 @@ func TestResumeReflectsCandidatePoolReadiness(t *testing.T) {
 		if response.Code != http.StatusOK {
 			t.Fatalf("resume status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body)
 		}
+		if strings.Contains(response.Body.String(), `"actions"`) {
+			t.Errorf("Resume body = %q, want readiness only", response.Body)
+		}
 		var result struct {
-			Status  string `json:"status"`
-			Actions []struct {
-				Kind string `json:"kind"`
-				Href string `json:"href"`
-			} `json:"actions"`
+			Status string `json:"status"`
 		}
 		if err := json.NewDecoder(response.Body).Decode(&result); err != nil {
 			t.Fatal(err)
 		}
-		return result
+		return result.Status
 	}
 
 	empty := resume()
-	if empty.Status != "candidate_pool_empty" ||
-		len(empty.Actions) != 1 ||
-		empty.Actions[0].Kind != "catalog_search" ||
-		empty.Actions[0].Href != "/candidate-pool" {
-		t.Errorf("empty Resume = %#v, want candidate_pool_empty with Catalog search entry", empty)
+	if empty != "candidate_pool_empty" {
+		t.Errorf("empty Resume = %q, want candidate_pool_empty", empty)
 	}
 
 	addResponse := candidatePoolRequest(
@@ -65,8 +55,8 @@ func TestResumeReflectsCandidatePoolReadiness(t *testing.T) {
 	}
 
 	ready := resume()
-	if ready.Status != "ready" || len(ready.Actions) != 0 {
-		t.Errorf("ready Resume = %#v, want ready without recovery actions", ready)
+	if ready != "ready" {
+		t.Errorf("ready Resume = %q, want ready", ready)
 	}
 }
 
@@ -92,23 +82,19 @@ func TestCandidatePoolEmptyBlocksDecisionWithoutCreatingMeal(t *testing.T) {
 				beginResponse.Body,
 			)
 		}
-		var blocked struct {
+		var result struct {
 			Error struct {
 				Code string `json:"code"`
 			} `json:"error"`
-			Actions []struct {
-				Kind string `json:"kind"`
-				Href string `json:"href"`
-			} `json:"actions"`
 		}
-		if err := json.NewDecoder(beginResponse.Body).Decode(&blocked); err != nil {
+		if strings.Contains(beginResponse.Body.String(), `"actions"`) {
+			t.Errorf("blocked Decision body = %q, want error only", beginResponse.Body)
+		}
+		if err := json.NewDecoder(beginResponse.Body).Decode(&result); err != nil {
 			t.Fatal(err)
 		}
-		if blocked.Error.Code != "candidate_pool_empty" ||
-			len(blocked.Actions) != 1 ||
-			blocked.Actions[0].Kind != "catalog_search" ||
-			blocked.Actions[0].Href != "/candidate-pool" {
-			t.Errorf("blocked Decision = %#v, want Candidate pool error and Catalog entry", blocked)
+		if result.Error.Code != "candidate_pool_empty" {
+			t.Errorf("blocked Decision = %#v, want candidate_pool_empty", result)
 		}
 	}
 

@@ -76,6 +76,9 @@ func TestEaterCanAddCatalogDishToCandidatePool(t *testing.T) {
 	if addResponse.Code != http.StatusCreated {
 		t.Fatalf("add status = %d, want %d; body = %s", addResponse.Code, http.StatusCreated, addResponse.Body)
 	}
+	if addResponse.Body.Len() != 0 {
+		t.Errorf("add body = %q, want empty", addResponse.Body)
+	}
 
 	listResponse := candidatePoolRequest(
 		t,
@@ -131,8 +134,13 @@ func TestPreferenceWeightPersistsAfterRelogin(t *testing.T) {
 		`{"dish_id":"meat_dish/番茄牛腩.md","preference_weight":2.2}`,
 		sessionCookie,
 	)
-	if updateResponse.Code != http.StatusOK {
-		t.Fatalf("update status = %d, want %d; body = %s", updateResponse.Code, http.StatusOK, updateResponse.Body)
+	if updateResponse.Code != http.StatusNoContent {
+		t.Fatalf(
+			"update status = %d, want %d; body = %s",
+			updateResponse.Code,
+			http.StatusNoContent,
+			updateResponse.Body,
+		)
 	}
 	if err := app.Close(); err != nil {
 		t.Fatal(err)
@@ -293,7 +301,7 @@ func TestCandidatePoolIsIsolatedByAccount(t *testing.T) {
 	}
 }
 
-func TestCandidatePoolRejectsInvalidOrUnknownDish(t *testing.T) {
+func TestCandidatePoolRejectsInvalidOrUnavailableDish(t *testing.T) {
 	app := openCatalogApp(t, "")
 	t.Cleanup(func() { app.Close() })
 	sessionCookie := registerCatalogEater(t, app)
@@ -310,15 +318,44 @@ func TestCandidatePoolRejectsInvalidOrUnknownDish(t *testing.T) {
 		t.Errorf("invalid Dish status = %d, want %d", invalid.Code, http.StatusBadRequest)
 	}
 
-	unknown := candidatePoolRequest(
+	assertUnavailable := func(body string) {
+		t.Helper()
+		response := candidatePoolRequest(
+			t,
+			app,
+			http.MethodPost,
+			"/api/candidate-pool/dishes",
+			body,
+			sessionCookie,
+		)
+		if response.Code != http.StatusNotFound {
+			t.Errorf("unavailable Dish status = %d, want %d", response.Code, http.StatusNotFound)
+		}
+		var result struct {
+			Error struct {
+				Code string `json:"code"`
+			} `json:"error"`
+		}
+		if err := json.NewDecoder(response.Body).Decode(&result); err != nil {
+			t.Fatal(err)
+		}
+		if result.Error.Code != "dish_unavailable" {
+			t.Errorf("unavailable Dish error = %q, want dish_unavailable", result.Error.Code)
+		}
+	}
+
+	assertUnavailable(`{"dish_id":"vegetable_dish/不存在.md","preference_weight":1}`)
+
+	addResponse := candidatePoolRequest(
 		t,
 		app,
 		http.MethodPost,
 		"/api/candidate-pool/dishes",
-		`{"dish_id":"vegetable_dish/不存在.md","preference_weight":1}`,
+		`{"dish_id":"vegetable_dish/番茄炒蛋.md","preference_weight":1}`,
 		sessionCookie,
 	)
-	if unknown.Code != http.StatusNotFound {
-		t.Errorf("unknown Dish status = %d, want %d", unknown.Code, http.StatusNotFound)
+	if addResponse.Code != http.StatusCreated {
+		t.Fatalf("add status = %d, want %d; body = %s", addResponse.Code, http.StatusCreated, addResponse.Body)
 	}
+	assertUnavailable(`{"dish_id":"vegetable_dish/番茄炒蛋.md","preference_weight":1}`)
 }

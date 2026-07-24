@@ -1,7 +1,6 @@
 package server
 
 import (
-	"math"
 	"net/http"
 	"strings"
 
@@ -95,30 +94,10 @@ func (a *App) addCandidatePoolDish(context *gin.Context) {
 		return
 	}
 	if affected == 0 {
-		var exists bool
-		err := a.db.QueryRowContext(
-			context,
-			"SELECT EXISTS(SELECT 1 FROM catalog_dishes WHERE source_path = ?)",
-			input.DishID,
-		).Scan(&exists)
-		if err != nil {
-			writeInternalError(context, "check Catalog Dish", err)
-			return
-		}
-		if exists {
-			writeError(context, http.StatusConflict, "candidate_pool_member_exists", "Dish 已在 Candidate pool 中")
-		} else {
-			writeError(context, http.StatusNotFound, "dish_not_found", "Catalog Dish 不存在")
-		}
+		writeError(context, http.StatusNotFound, "dish_unavailable", "无法加入 Candidate pool")
 		return
 	}
-
-	dish, err := a.candidateDish(context, account.ID, input.DishID)
-	if err != nil {
-		writeInternalError(context, "read added Candidate pool member", err)
-		return
-	}
-	context.JSON(http.StatusCreated, gin.H{"dish": dish})
+	context.Status(http.StatusCreated)
 }
 
 func (a *App) updateCandidatePoolDish(context *gin.Context) {
@@ -158,12 +137,7 @@ func (a *App) updateCandidatePoolDish(context *gin.Context) {
 		return
 	}
 
-	dish, err := a.candidateDish(context, account.ID, input.DishID)
-	if err != nil {
-		writeInternalError(context, "read updated Candidate pool member", err)
-		return
-	}
-	context.JSON(http.StatusOK, gin.H{"dish": dish})
+	context.Status(http.StatusNoContent)
 }
 
 func (a *App) removeCandidatePoolDish(context *gin.Context) {
@@ -199,29 +173,8 @@ func (a *App) removeCandidatePoolDish(context *gin.Context) {
 	context.Status(http.StatusNoContent)
 }
 
-func (a *App) candidateDish(context *gin.Context, accountID int64, dishID string) (candidateDishResponse, error) {
-	var sourcePath, name string
-	var weight float64
-	err := a.db.QueryRowContext(
-		context,
-		`SELECT catalog_dishes.source_path, catalog_dishes.name, candidate_pool.preference_weight
-		 FROM candidate_pool
-		 JOIN catalog_dishes ON catalog_dishes.source_path = candidate_pool.dish_id
-		 WHERE candidate_pool.account_id = ? AND candidate_pool.dish_id = ?`,
-		accountID,
-		dishID,
-	).Scan(&sourcePath, &name, &weight)
-	if err != nil {
-		return candidateDishResponse{}, err
-	}
-	return candidateDishResponse{
-		catalogDishResponse: catalogDish(sourcePath, name),
-		PreferenceWeight:    weight,
-	}, nil
-}
-
 func validPreferenceWeight(weight float64) bool {
-	return !math.IsNaN(weight) && !math.IsInf(weight, 0) && weight >= 0.1 && weight <= 5
+	return weight >= 0.1 && weight <= 5
 }
 
 func validDishID(dishID string) bool {
