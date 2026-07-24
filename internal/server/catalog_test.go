@@ -2,6 +2,7 @@ package server_test
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -132,6 +133,54 @@ func TestRepeatedCatalogImportKeepsDishIdentity(t *testing.T) {
 	}
 	if firstImport[0].ID == "" || firstImport[0].ID != secondImport[0].ID {
 		t.Errorf("Dish IDs = (%q, %q), want the same non-empty identity", firstImport[0].ID, secondImport[0].ID)
+	}
+}
+
+func TestCatalogImportUpgradesLegacyCatalogSchema(t *testing.T) {
+	databasePath := filepath.Join(t.TempDir(), "what-to-eat.db")
+	db, err := sql.Open("sqlite", databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`
+		CREATE TABLE catalog_dishes (
+			id TEXT PRIMARY KEY,
+			source_path TEXT NOT NULL UNIQUE,
+			name TEXT NOT NULL,
+			category TEXT NOT NULL,
+			recipe TEXT NOT NULL,
+			tags TEXT NOT NULL
+		);
+		INSERT INTO catalog_dishes (id, source_path, name, category, recipe, tags)
+		VALUES ('legacy-id', 'drink/柠檬水.md', '旧柠檬水', '饮料', '旧 Recipe', '[]');
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	app := openCatalogApp(t, databasePath)
+	t.Cleanup(func() { app.Close() })
+	sessionCookie := registerCatalogEater(t, app)
+
+	request := httptest.NewRequest(http.MethodGet, "/api/catalog/dishes?q=柠檬水", nil)
+	request.AddCookie(sessionCookie)
+	response := httptest.NewRecorder()
+	app.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("search status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body)
+	}
+	var result struct {
+		Dishes []struct {
+			ID string `json:"id"`
+		} `json:"dishes"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&result); err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Dishes) != 1 || result.Dishes[0].ID != "drink/柠檬水.md" {
+		t.Errorf("dishes = %#v, want migrated source path identity", result.Dishes)
 	}
 }
 

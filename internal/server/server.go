@@ -92,6 +92,10 @@ func New(config Config) (*App, error) {
 		db.Close()
 		return nil, err
 	}
+	if err := migrateLegacyCatalogSchema(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate Catalog: %w", err)
+	}
 	if config.CatalogDir != "" {
 		if err := importCatalog(db, config.CatalogDir); err != nil {
 			db.Close()
