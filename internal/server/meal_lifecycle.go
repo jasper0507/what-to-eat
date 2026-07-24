@@ -18,6 +18,7 @@ const (
 	mealStatusCandidatePoolEmpty mealStatus   = "candidate_pool_empty"
 	mealStatusReady              mealStatus   = "ready"
 	mealStatusActiveDecision     mealStatus   = "active_decision"
+	mealStatusPendingRatings     mealStatus   = "pending_ratings"
 	decisionModePool             decisionMode = "pool"
 	decisionModeDiscovery        decisionMode = "discovery"
 	defaultCooldown                           = 2
@@ -35,8 +36,11 @@ const activeDecisionQuery = `
 `
 
 var (
-	errCandidatePoolEmpty = errors.New("Candidate pool is empty")
-	errDecisionNotFound   = errors.New("Decision not found")
+	errCandidatePoolEmpty    = errors.New("Candidate pool is empty")
+	errDecisionNotFound      = errors.New("Decision not found")
+	errPendingRatingNotFound = errors.New("Pending rating not found")
+	errPendingRatings        = errors.New("Pending ratings must be resolved")
+	errTasteRatingConflict   = errors.New("Taste rating conflicts with the resolved rating")
 )
 
 type mealLifecycle struct {
@@ -103,8 +107,9 @@ func newMealLifecycle(
 }
 
 type mealState struct {
-	Status   mealStatus            `json:"status"`
-	Decision *mealDecisionResponse `json:"decision,omitempty"`
+	Status         mealStatus              `json:"status"`
+	Decision       *mealDecisionResponse   `json:"decision,omitempty"`
+	PendingRatings []pendingRatingResponse `json:"pending_ratings,omitempty"`
 }
 
 type mealDecisionResponse struct {
@@ -142,8 +147,29 @@ type recipeReferenceResponse struct {
 }
 
 type acceptanceResponse struct {
-	EatingRecord eatingRecordResponse    `json:"eating_record"`
-	Recipe       recipeReferenceResponse `json:"recipe"`
+	EatingRecord  eatingRecordResponse    `json:"eating_record"`
+	Recipe        recipeReferenceResponse `json:"recipe"`
+	PendingRating *pendingRatingResponse  `json:"pending_rating,omitempty"`
+}
+
+type pendingRatingResponse struct {
+	ID     int64               `json:"id"`
+	MealID int64               `json:"meal_id"`
+	MealAt int64               `json:"meal_at"`
+	Dish   catalogDishResponse `json:"dish"`
+}
+
+type tasteRatingResponse struct {
+	PendingRatingID  int64               `json:"pending_rating_id"`
+	Rating           int                 `json:"rating"`
+	Label            string              `json:"label"`
+	Outcome          string              `json:"outcome"`
+	PreferenceWeight *float64            `json:"preference_weight,omitempty"`
+	Dish             catalogDishResponse `json:"dish"`
+}
+
+type tasteRatingInput struct {
+	Rating int `json:"rating"`
 }
 
 func scanActiveDecision(row *sql.Row) (mealState, error) {
@@ -166,6 +192,17 @@ func scanActiveDecision(row *sql.Row) (mealState, error) {
 }
 
 func (m *mealLifecycle) Resume(context context.Context, accountID int64) (mealState, error) {
+	pendingRatings, err := m.unresolvedPendingRatings(context, nil, accountID)
+	if err != nil {
+		return mealState{}, err
+	}
+	if len(pendingRatings) > 0 {
+		return mealState{
+			Status:         mealStatusPendingRatings,
+			PendingRatings: pendingRatings,
+		}, nil
+	}
+
 	activeDecision, err := scanActiveDecision(
 		m.db.QueryRowContext(context, activeDecisionQuery, accountID),
 	)
@@ -179,7 +216,17 @@ func (m *mealLifecycle) Resume(context context.Context, accountID int64) (mealSt
 	var hasCandidates bool
 	if err := m.db.QueryRowContext(
 		context,
-		"SELECT EXISTS(SELECT 1 FROM candidate_pool WHERE account_id = ?)",
+		`SELECT EXISTS(
+			SELECT 1
+			FROM candidate_pool
+			WHERE candidate_pool.account_id = ?
+			  AND NOT EXISTS (
+				SELECT 1
+				FROM rejection_marks
+				WHERE rejection_marks.account_id = candidate_pool.account_id
+				  AND rejection_marks.dish_id = candidate_pool.dish_id
+			  )
+		 )`,
 		accountID,
 	).Scan(&hasCandidates); err != nil {
 		return mealState{}, err
@@ -188,6 +235,83 @@ func (m *mealLifecycle) Resume(context context.Context, accountID int64) (mealSt
 		return mealState{Status: mealStatusCandidatePoolEmpty}, nil
 	}
 	return mealState{Status: mealStatusReady}, nil
+}
+
+func (m *mealLifecycle) unresolvedPendingRatings(
+	context context.Context,
+	transaction *sql.Tx,
+	accountID int64,
+) ([]pendingRatingResponse, error) {
+	query := func() (*sql.Rows, error) {
+		const statement = `
+			SELECT pending_ratings.id, pending_ratings.meal_id, pending_ratings.meal_at,
+			       catalog_dishes.source_path, catalog_dishes.name
+			FROM pending_ratings
+			JOIN catalog_dishes ON catalog_dishes.source_path = pending_ratings.dish_id
+			WHERE pending_ratings.account_id = ? AND pending_ratings.rating IS NULL
+			ORDER BY pending_ratings.meal_at, pending_ratings.id
+		`
+		if transaction != nil {
+			return transaction.QueryContext(context, statement, accountID)
+		}
+		return m.db.QueryContext(context, statement, accountID)
+	}
+	rows, err := query()
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	pendingRatings := make([]pendingRatingResponse, 0)
+	for rows.Next() {
+		var pending pendingRatingResponse
+		var dishID, dishName string
+		if err := rows.Scan(
+			&pending.ID,
+			&pending.MealID,
+			&pending.MealAt,
+			&dishID,
+			&dishName,
+		); err != nil {
+			return nil, err
+		}
+		pending.Dish = catalogDish(dishID, dishName)
+		pendingRatings = append(pendingRatings, pending)
+	}
+	return pendingRatings, rows.Err()
+}
+
+func pendingRatingForDecision(
+	context context.Context,
+	transaction *sql.Tx,
+	accountID, decisionID int64,
+) (*pendingRatingResponse, error) {
+	var pending pendingRatingResponse
+	var dishID, dishName string
+	err := transaction.QueryRowContext(
+		context,
+		`SELECT pending_ratings.id, pending_ratings.meal_id, pending_ratings.meal_at,
+		        catalog_dishes.source_path, catalog_dishes.name
+		 FROM pending_ratings
+		 JOIN catalog_dishes ON catalog_dishes.source_path = pending_ratings.dish_id
+		 WHERE pending_ratings.account_id = ? AND pending_ratings.decision_id = ?`,
+		accountID,
+		decisionID,
+	).Scan(
+		&pending.ID,
+		&pending.MealID,
+		&pending.MealAt,
+		&dishID,
+		&dishName,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	pending.Dish = catalogDish(dishID, dishName)
+	return &pending, nil
 }
 
 func (m *mealLifecycle) poolCandidates(
@@ -201,6 +325,12 @@ func (m *mealLifecycle) poolCandidates(
 		 FROM candidate_pool
 		 JOIN catalog_dishes ON catalog_dishes.source_path = candidate_pool.dish_id
 		 WHERE candidate_pool.account_id = ?
+		   AND NOT EXISTS (
+			SELECT 1
+			FROM rejection_marks
+			WHERE rejection_marks.account_id = candidate_pool.account_id
+			  AND rejection_marks.dish_id = candidate_pool.dish_id
+		   )
 		 ORDER BY catalog_dishes.source_path`,
 		accountID,
 	)
@@ -352,7 +482,14 @@ func (m *mealLifecycle) discoveryDish(
 			WHERE candidate_pool.account_id = ?
 			  AND candidate_pool.dish_id = catalog_dishes.source_path
 		 )
+		   AND NOT EXISTS (
+			SELECT 1
+			FROM rejection_marks
+			WHERE rejection_marks.account_id = ?
+			  AND rejection_marks.dish_id = catalog_dishes.source_path
+		   )
 		 ORDER BY catalog_dishes.source_path`,
+		accountID,
 		accountID,
 	)
 	if err != nil {
@@ -501,6 +638,17 @@ func (m *mealLifecycle) Begin(context context.Context, accountID int64) (state m
 		return mealState{}, false, err
 	}
 	defer transaction.Rollback()
+
+	pendingRatings, err := m.unresolvedPendingRatings(context, transaction, accountID)
+	if err != nil {
+		return mealState{}, false, err
+	}
+	if len(pendingRatings) > 0 {
+		return mealState{
+			Status:         mealStatusPendingRatings,
+			PendingRatings: pendingRatings,
+		}, false, errPendingRatings
+	}
 
 	activeDecision, err := scanActiveDecision(
 		transaction.QueryRowContext(context, activeDecisionQuery, accountID),
@@ -755,11 +903,11 @@ func (m *mealLifecycle) Accept(
 	defer transaction.Rollback()
 
 	var mealID int64
-	var status, dishID, dishName string
+	var status, mode, dishID, dishName string
 	var existingSequence, rerolledToID sql.NullInt64
 	err = transaction.QueryRowContext(
 		context,
-		`SELECT meals.id, decisions.status, catalog_dishes.source_path,
+		`SELECT meals.id, decisions.status, decisions.mode, catalog_dishes.source_path,
 		        catalog_dishes.name, eating_records.sequence, decisions.rerolled_to_id
 		 FROM decisions
 		 JOIN meals ON meals.id = decisions.meal_id
@@ -768,7 +916,7 @@ func (m *mealLifecycle) Accept(
 		 WHERE decisions.id = ? AND meals.account_id = ?`,
 		decisionID,
 		accountID,
-	).Scan(&mealID, &status, &dishID, &dishName, &existingSequence, &rerolledToID)
+	).Scan(&mealID, &status, &mode, &dishID, &dishName, &existingSequence, &rerolledToID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return acceptanceResponse{}, errDecisionNotFound
 	}
@@ -786,6 +934,15 @@ func (m *mealLifecycle) Accept(
 	}
 	if status == "accepted" && existingSequence.Valid {
 		result.EatingRecord.Sequence = existingSequence.Int64
+		result.PendingRating, err = pendingRatingForDecision(
+			context,
+			transaction,
+			accountID,
+			decisionID,
+		)
+		if err != nil {
+			return acceptanceResponse{}, err
+		}
 		return result, nil
 	}
 	if status != "active" {
@@ -826,10 +983,160 @@ func (m *mealLifecycle) Accept(
 	); err != nil {
 		return acceptanceResponse{}, err
 	}
+	if mode == string(decisionModeDiscovery) {
+		if _, err := transaction.ExecContext(
+			context,
+			`INSERT INTO pending_ratings (
+				account_id, meal_id, decision_id, dish_id, meal_at
+			 )
+			 SELECT account_id, meal_id, decision_id, dish_id, accepted_at
+			 FROM eating_records
+			 WHERE decision_id = ?`,
+			decisionID,
+		); err != nil {
+			return acceptanceResponse{}, err
+		}
+		result.PendingRating, err = pendingRatingForDecision(
+			context,
+			transaction,
+			accountID,
+			decisionID,
+		)
+		if err != nil {
+			return acceptanceResponse{}, err
+		}
+	}
 	if err := transaction.Commit(); err != nil {
 		return acceptanceResponse{}, err
 	}
 	return result, nil
+}
+
+func (m *mealLifecycle) Rate(
+	context context.Context,
+	accountID, pendingRatingID int64,
+	rating int,
+) (tasteRatingResponse, error) {
+	transaction, err := m.db.BeginTx(context, nil)
+	if err != nil {
+		return tasteRatingResponse{}, err
+	}
+	defer transaction.Rollback()
+
+	var existingRating sql.NullInt64
+	var dishID, dishName string
+	err = transaction.QueryRowContext(
+		context,
+		`SELECT pending_ratings.rating, catalog_dishes.source_path, catalog_dishes.name
+		 FROM pending_ratings
+		 JOIN catalog_dishes ON catalog_dishes.source_path = pending_ratings.dish_id
+		 WHERE pending_ratings.id = ? AND pending_ratings.account_id = ?`,
+		pendingRatingID,
+		accountID,
+	).Scan(&existingRating, &dishID, &dishName)
+	if errors.Is(err, sql.ErrNoRows) {
+		return tasteRatingResponse{}, errPendingRatingNotFound
+	}
+	if err != nil {
+		return tasteRatingResponse{}, err
+	}
+	if existingRating.Valid {
+		if int(existingRating.Int64) != rating {
+			return tasteRatingResponse{}, errTasteRatingConflict
+		}
+		return newTasteRatingResponse(pendingRatingID, rating, dishID, dishName), nil
+	}
+
+	if weight, admitted := preferenceWeightForTasteRating(rating); admitted {
+		if _, err := transaction.ExecContext(
+			context,
+			"DELETE FROM rejection_marks WHERE account_id = ? AND dish_id = ?",
+			accountID,
+			dishID,
+		); err != nil {
+			return tasteRatingResponse{}, err
+		}
+		if _, err := transaction.ExecContext(
+			context,
+			`INSERT INTO candidate_pool (account_id, dish_id, preference_weight)
+			 VALUES (?, ?, ?)
+			 ON CONFLICT(account_id, dish_id)
+			 DO UPDATE SET preference_weight = excluded.preference_weight`,
+			accountID,
+			dishID,
+			weight,
+		); err != nil {
+			return tasteRatingResponse{}, err
+		}
+	} else {
+		if _, err := transaction.ExecContext(
+			context,
+			"DELETE FROM candidate_pool WHERE account_id = ? AND dish_id = ?",
+			accountID,
+			dishID,
+		); err != nil {
+			return tasteRatingResponse{}, err
+		}
+		if _, err := transaction.ExecContext(
+			context,
+			`INSERT INTO rejection_marks (account_id, dish_id, rating, created_at)
+			 VALUES (?, ?, ?, unixepoch())
+			 ON CONFLICT(account_id, dish_id)
+			 DO UPDATE SET rating = excluded.rating, created_at = excluded.created_at`,
+			accountID,
+			dishID,
+			rating,
+		); err != nil {
+			return tasteRatingResponse{}, err
+		}
+	}
+	if _, err := transaction.ExecContext(
+		context,
+		`UPDATE pending_ratings
+		 SET rating = ?, resolved_at = unixepoch()
+		 WHERE id = ? AND account_id = ? AND rating IS NULL`,
+		rating,
+		pendingRatingID,
+		accountID,
+	); err != nil {
+		return tasteRatingResponse{}, err
+	}
+	if err := transaction.Commit(); err != nil {
+		return tasteRatingResponse{}, err
+	}
+	return newTasteRatingResponse(pendingRatingID, rating, dishID, dishName), nil
+}
+
+func newTasteRatingResponse(
+	pendingRatingID int64,
+	rating int,
+	dishID, dishName string,
+) tasteRatingResponse {
+	result := tasteRatingResponse{
+		PendingRatingID: pendingRatingID,
+		Rating:          rating,
+		Label:           [...]string{"", "拉完了", "NPC", "人上人", "顶级", "夯"}[rating],
+		Outcome:         "rejection_mark",
+		Dish:            catalogDish(dishID, dishName),
+	}
+	if weight, admitted := preferenceWeightForTasteRating(rating); admitted {
+		result.Outcome = "pool_admission"
+		result.PreferenceWeight = &weight
+	}
+	return result
+}
+
+func preferenceWeightForTasteRating(rating int) (float64, bool) {
+	switch rating {
+	case 3:
+		return 0.7, true
+	case 4:
+		return 1.0, true
+	case 5:
+		return 1.3, true
+	default:
+		return 0, false
+	}
 }
 
 func (a *App) resumeMeal(context *gin.Context) {
@@ -852,6 +1159,13 @@ func (a *App) beginMeal(context *gin.Context) {
 	}
 	state, created, err := a.mealLifecycle.Begin(context, account.ID)
 	switch {
+	case errors.Is(err, errPendingRatings):
+		writeError(
+			context,
+			http.StatusConflict,
+			string(state.Status),
+			"请先解决所有 Pending rating，再开始新的 Decision",
+		)
 	case errors.Is(err, errCandidatePoolEmpty):
 		writeError(
 			context,
@@ -914,6 +1228,34 @@ func (a *App) acceptDecision(context *gin.Context) {
 		writeError(context, http.StatusNotFound, "decision_not_found", "Decision 不存在")
 	case err != nil:
 		writeInternalError(context, "accept Decision", err)
+	default:
+		context.JSON(http.StatusOK, result)
+	}
+}
+
+func (a *App) ratePendingRating(context *gin.Context) {
+	account, ok := a.currentAccount(context)
+	if !ok {
+		return
+	}
+	pendingRatingID, err := strconv.ParseInt(context.Param("pendingRatingID"), 10, 64)
+	if err != nil || pendingRatingID <= 0 {
+		writeError(context, http.StatusNotFound, "pending_rating_not_found", "Pending rating 不存在")
+		return
+	}
+	var input tasteRatingInput
+	if err := context.ShouldBindJSON(&input); err != nil || input.Rating < 1 || input.Rating > 5 {
+		writeError(context, http.StatusBadRequest, "invalid_request", "Taste rating 必须为 1–5")
+		return
+	}
+	result, err := a.mealLifecycle.Rate(context, account.ID, pendingRatingID, input.Rating)
+	switch {
+	case errors.Is(err, errPendingRatingNotFound):
+		writeError(context, http.StatusNotFound, "pending_rating_not_found", "Pending rating 不存在")
+	case errors.Is(err, errTasteRatingConflict):
+		writeError(context, http.StatusConflict, "rating_conflict", "Pending rating 已用其他 Taste rating 解决")
+	case err != nil:
+		writeInternalError(context, "resolve Pending rating", err)
 	default:
 		context.JSON(http.StatusOK, result)
 	}
@@ -1038,4 +1380,56 @@ func migrateDiscoverySchema(db *sql.DB) (err error) {
 		return errors.New("Discovery migration left invalid foreign keys")
 	}
 	return rows.Err()
+}
+
+func migratePendingRatingSchema(db *sql.DB) error {
+	transaction, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer transaction.Rollback()
+	if _, err := transaction.Exec(`
+		CREATE TABLE IF NOT EXISTS pending_ratings (
+			id INTEGER PRIMARY KEY,
+			account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+			meal_id INTEGER NOT NULL REFERENCES meals(id) ON DELETE CASCADE,
+			decision_id INTEGER NOT NULL UNIQUE REFERENCES decisions(id) ON DELETE CASCADE,
+			dish_id TEXT NOT NULL REFERENCES catalog_dishes(source_path),
+			meal_at INTEGER NOT NULL,
+			rating INTEGER CHECK (rating BETWEEN 1 AND 5),
+			resolved_at INTEGER,
+			CHECK (
+				(rating IS NULL AND resolved_at IS NULL) OR
+				(rating IS NOT NULL AND resolved_at IS NOT NULL)
+			)
+		);
+		CREATE INDEX IF NOT EXISTS pending_ratings_account_unresolved
+			ON pending_ratings(account_id, meal_at, id)
+			WHERE rating IS NULL;
+		CREATE TABLE IF NOT EXISTS rejection_marks (
+			account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+			dish_id TEXT NOT NULL REFERENCES catalog_dishes(source_path) ON DELETE CASCADE,
+			rating INTEGER NOT NULL CHECK (rating IN (1, 2)),
+			created_at INTEGER NOT NULL,
+			PRIMARY KEY (account_id, dish_id)
+		);
+		INSERT INTO pending_ratings (
+			account_id, meal_id, decision_id, dish_id, meal_at
+		)
+		SELECT eating_records.account_id, meals.id, decisions.id,
+		       decisions.dish_id, eating_records.accepted_at
+		FROM decisions
+		JOIN meals ON meals.id = decisions.meal_id
+		JOIN eating_records ON eating_records.decision_id = decisions.id
+		WHERE decisions.mode = 'discovery'
+		  AND decisions.status = 'accepted'
+		  AND NOT EXISTS (
+			SELECT 1
+			FROM pending_ratings
+			WHERE pending_ratings.decision_id = decisions.id
+		  );
+	`); err != nil {
+		return err
+	}
+	return transaction.Commit()
 }

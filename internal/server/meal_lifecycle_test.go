@@ -25,8 +25,9 @@ type mealDecision struct {
 }
 
 type mealState struct {
-	Status   string       `json:"status"`
-	Decision mealDecision `json:"decision"`
+	Status         string          `json:"status"`
+	Decision       mealDecision    `json:"decision"`
+	PendingRatings []pendingRating `json:"pending_ratings"`
 }
 
 type acceptanceResult struct {
@@ -36,6 +37,7 @@ type acceptanceResult struct {
 	Recipe struct {
 		Dish candidateDish `json:"dish"`
 	} `json:"recipe"`
+	PendingRating *pendingRating `json:"pending_rating"`
 }
 
 func TestBeginUsesDiscoveryWhenPoolAndCooldownEligibleSetAreSmall(t *testing.T) {
@@ -130,7 +132,11 @@ func TestCurrentAndRecentRerollsRaiseDiscoveryPressure(t *testing.T) {
 	if discovery.Mode != "discovery" || poolDishIDs[discovery.Dish.ID] {
 		t.Fatalf("Decision after current Reroll = %#v, want out-of-pool Discovery", discovery)
 	}
-	acceptMealDecision(t, app, cookie, discovery, 1)
+	accepted := acceptDecisionResult(t, app, cookie, discovery)
+	if accepted.PendingRating == nil {
+		t.Fatal("Discovery Acceptance did not return a Pending rating")
+	}
+	ratePending(t, app, cookie, accepted.PendingRating.ID, 1)
 
 	nextMeal := beginMealDecision(t, app, cookie)
 	if nextMeal.Mode != "discovery" || poolDishIDs[nextMeal.Dish.ID] {

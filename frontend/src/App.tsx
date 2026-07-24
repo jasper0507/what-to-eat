@@ -58,9 +58,17 @@ type MealDecision = {
   dish: Dish;
 };
 
+type PendingRating = {
+  id: number;
+  meal_id: number;
+  meal_at: number;
+  dish: Dish;
+};
+
 type MealResume =
   | { status: "candidate_pool_empty" | "ready" }
-  | { status: "active_decision"; decision: MealDecision };
+  | { status: "active_decision"; decision: MealDecision }
+  | { status: "pending_ratings"; pending_ratings: PendingRating[] };
 
 type Recipe = {
   dish: Dish;
@@ -72,6 +80,14 @@ type AcceptanceResult = {
     dish: Dish;
   };
 };
+
+const tasteRatings = [
+  { rating: 1, label: "拉完了" },
+  { rating: 2, label: "NPC" },
+  { rating: 3, label: "人上人" },
+  { rating: 4, label: "顶级" },
+  { rating: 5, label: "夯" },
+] as const;
 
 async function requestJSON<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
@@ -202,6 +218,7 @@ function HomePage({ account }: { account: Account }) {
   const [error, setError] = useState<string>();
   const [submitting, setSubmitting] = useState(false);
   const [rerolling, setRerolling] = useState(false);
+  const [submittingRating, setSubmittingRating] = useState<string>();
   const navigate = useNavigate();
 
   async function loadMeal() {
@@ -262,6 +279,22 @@ function HomePage({ account }: { account: Account }) {
     }
   }
 
+  async function ratePending(pendingRatingID: number, rating: number) {
+    setSubmittingRating(`${pendingRatingID}:${rating}`);
+    setError(undefined);
+    try {
+      await requestJSON(`/api/pending-ratings/${pendingRatingID}/rate`, {
+        method: "POST",
+        body: JSON.stringify({ rating }),
+      });
+      await loadMeal();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "无法提交 Taste rating");
+    } finally {
+      setSubmittingRating(undefined);
+    }
+  }
+
   return (
     <main className="page-shell">
       <Card className="page-card" bordered={false}>
@@ -279,6 +312,67 @@ function HomePage({ account }: { account: Account }) {
             <div className="inline-loading" aria-label="正在恢复 Meal 状态">
               <Spin />
             </div>
+          )}
+
+          {resume?.status === "pending_ratings" && (
+            <section aria-labelledby="pending-ratings-heading">
+              <Space direction="vertical" size={20} className="full-width">
+                <div>
+                  <Typography.Title id="pending-ratings-heading" level={2}>
+                    先评完上次的 Discovery
+                  </Typography.Title>
+                  <Typography.Paragraph type="secondary">
+                    每条只需点一下；全部解决后才能开始新的 Decision。
+                  </Typography.Paragraph>
+                </div>
+                <List
+                  className="pending-rating-list"
+                  aria-label="Pending ratings"
+                  dataSource={resume.pending_ratings}
+                  renderItem={(pending) => (
+                    <List.Item key={pending.id}>
+                      <article className="pending-rating">
+                        <Typography.Text type="secondary">
+                          Meal 时间：
+                          <time dateTime={new Date(pending.meal_at * 1000).toISOString()}>
+                            {new Intl.DateTimeFormat("zh-CN", {
+                              dateStyle: "medium",
+                              timeStyle: "short",
+                            }).format(new Date(pending.meal_at * 1000))}
+                          </time>
+                        </Typography.Text>
+                        <Typography.Title level={3}>{pending.dish.name}</Typography.Title>
+                        <div
+                          className="taste-rating-options"
+                          aria-label={`${pending.dish.name} Taste rating`}
+                        >
+                          {tasteRatings.map(({ rating, label }) => {
+                            const submissionKey = `${pending.id}:${rating}`;
+                            return (
+                              <Button
+                                key={rating}
+                                size="large"
+                                autoInsertSpace={false}
+                                loading={submittingRating === submissionKey}
+                                disabled={
+                                  submittingRating !== undefined &&
+                                  submittingRating !== submissionKey
+                                }
+                                onClick={() => {
+                                  void ratePending(pending.id, rating);
+                                }}
+                              >
+                                {label}
+                              </Button>
+                            );
+                          })}
+                        </div>
+                      </article>
+                    </List.Item>
+                  )}
+                />
+              </Space>
+            </section>
           )}
 
           {resume?.status === "candidate_pool_empty" && (

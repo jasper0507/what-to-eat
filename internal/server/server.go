@@ -150,6 +150,10 @@ func newApp(config Config, decisionRandom *mathrand.Rand) (*App, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate Discovery: %w", err)
 	}
+	if err := migratePendingRatingSchema(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate Pending rating: %w", err)
+	}
 	if config.CatalogDir != "" {
 		if err := importCatalog(db, config.CatalogDir); err != nil {
 			db.Close()
@@ -194,6 +198,7 @@ func (a *App) routes(webDir string) {
 	router.POST("/api/meals", a.beginMeal)
 	router.POST("/api/decisions/:decisionID/reroll", a.rerollDecision)
 	router.POST("/api/decisions/:decisionID/accept", a.acceptDecision)
+	router.POST("/api/pending-ratings/:pendingRatingID/rate", a.ratePendingRating)
 	if webDir != "" {
 		indexPath := filepath.Join(webDir, "index.html")
 		router.Static("/assets", filepath.Join(webDir, "assets"))
