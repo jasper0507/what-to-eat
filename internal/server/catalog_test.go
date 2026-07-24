@@ -11,15 +11,40 @@ import (
 	"github.com/jasper0507/what-to-eat/internal/server"
 )
 
-func TestCatalogSearchRequiresAuthenticatedAccount(t *testing.T) {
+func openCatalogApp(t *testing.T, databasePath string) *server.App {
+	t.Helper()
+	if databasePath == "" {
+		databasePath = filepath.Join(t.TempDir(), "what-to-eat.db")
+	}
 	app, err := server.New(server.Config{
-		DatabasePath: filepath.Join(t.TempDir(), "what-to-eat.db"),
+		DatabasePath: databasePath,
+		CatalogDir:   filepath.Join("testdata", "catalog"),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { app.Close() })
+	return app
+}
 
+func registerCatalogEater(t *testing.T, app *server.App) *http.Cookie {
+	t.Helper()
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/api/auth/register",
+		bytes.NewBufferString(`{"username":"catalog_eater","password":"correct horse battery staple"}`),
+	)
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	app.ServeHTTP(response, request)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("register status = %d, want %d", response.Code, http.StatusCreated)
+	}
+	return response.Result().Cookies()[0]
+}
+
+func TestCatalogSearchRequiresAuthenticatedAccount(t *testing.T) {
+	app := openCatalogApp(t, "")
+	t.Cleanup(func() { app.Close() })
 	request := httptest.NewRequest(http.MethodGet, "/api/catalog/dishes?q=番茄", nil)
 	response := httptest.NewRecorder()
 	app.ServeHTTP(response, request)
@@ -30,29 +55,12 @@ func TestCatalogSearchRequiresAuthenticatedAccount(t *testing.T) {
 }
 
 func TestAuthenticatedEaterCanSearchCatalogByDishName(t *testing.T) {
-	app, err := server.New(server.Config{
-		DatabasePath: filepath.Join(t.TempDir(), "what-to-eat.db"),
-		CatalogDir:   filepath.Join("testdata", "catalog"),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	app := openCatalogApp(t, "")
 	t.Cleanup(func() { app.Close() })
-
-	registerRequest := httptest.NewRequest(
-		http.MethodPost,
-		"/api/auth/register",
-		bytes.NewBufferString(`{"username":"catalog_eater","password":"correct horse battery staple"}`),
-	)
-	registerRequest.Header.Set("Content-Type", "application/json")
-	registerResponse := httptest.NewRecorder()
-	app.ServeHTTP(registerResponse, registerRequest)
-	if registerResponse.Code != http.StatusCreated {
-		t.Fatalf("register status = %d, want %d", registerResponse.Code, http.StatusCreated)
-	}
+	sessionCookie := registerCatalogEater(t, app)
 
 	request := httptest.NewRequest(http.MethodGet, "/api/catalog/dishes?q=炒蛋", nil)
-	request.AddCookie(registerResponse.Result().Cookies()[0])
+	request.AddCookie(sessionCookie)
 	response := httptest.NewRecorder()
 	app.ServeHTTP(response, request)
 
@@ -85,27 +93,9 @@ func TestAuthenticatedEaterCanSearchCatalogByDishName(t *testing.T) {
 }
 
 func TestRepeatedCatalogImportKeepsDishIdentity(t *testing.T) {
-	config := server.Config{
-		DatabasePath: filepath.Join(t.TempDir(), "what-to-eat.db"),
-		CatalogDir:   filepath.Join("testdata", "catalog"),
-	}
-	app, err := server.New(config)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	registerRequest := httptest.NewRequest(
-		http.MethodPost,
-		"/api/auth/register",
-		bytes.NewBufferString(`{"username":"stable_catalog_eater","password":"correct horse battery staple"}`),
-	)
-	registerRequest.Header.Set("Content-Type", "application/json")
-	registerResponse := httptest.NewRecorder()
-	app.ServeHTTP(registerResponse, registerRequest)
-	if registerResponse.Code != http.StatusCreated {
-		t.Fatalf("register status = %d, want %d", registerResponse.Code, http.StatusCreated)
-	}
-	sessionCookie := registerResponse.Result().Cookies()[0]
+	databasePath := filepath.Join(t.TempDir(), "what-to-eat.db")
+	app := openCatalogApp(t, databasePath)
+	sessionCookie := registerCatalogEater(t, app)
 
 	search := func(app *server.App) []struct {
 		ID string `json:"id"`
@@ -133,10 +123,7 @@ func TestRepeatedCatalogImportKeepsDishIdentity(t *testing.T) {
 	if err := app.Close(); err != nil {
 		t.Fatal(err)
 	}
-	app, err = server.New(config)
-	if err != nil {
-		t.Fatal(err)
-	}
+	app = openCatalogApp(t, databasePath)
 	t.Cleanup(func() { app.Close() })
 	secondImport := search(app)
 
@@ -149,29 +136,12 @@ func TestRepeatedCatalogImportKeepsDishIdentity(t *testing.T) {
 }
 
 func TestCatalogSearchRejectsInvalidQuery(t *testing.T) {
-	app, err := server.New(server.Config{
-		DatabasePath: filepath.Join(t.TempDir(), "what-to-eat.db"),
-		CatalogDir:   filepath.Join("testdata", "catalog"),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	app := openCatalogApp(t, "")
 	t.Cleanup(func() { app.Close() })
-
-	registerRequest := httptest.NewRequest(
-		http.MethodPost,
-		"/api/auth/register",
-		bytes.NewBufferString(`{"username":"query_eater","password":"correct horse battery staple"}`),
-	)
-	registerRequest.Header.Set("Content-Type", "application/json")
-	registerResponse := httptest.NewRecorder()
-	app.ServeHTTP(registerResponse, registerRequest)
-	if registerResponse.Code != http.StatusCreated {
-		t.Fatalf("register status = %d, want %d", registerResponse.Code, http.StatusCreated)
-	}
+	sessionCookie := registerCatalogEater(t, app)
 
 	request := httptest.NewRequest(http.MethodGet, "/api/catalog/dishes?q=%20%20", nil)
-	request.AddCookie(registerResponse.Result().Cookies()[0])
+	request.AddCookie(sessionCookie)
 	response := httptest.NewRecorder()
 	app.ServeHTTP(response, request)
 
@@ -181,27 +151,9 @@ func TestCatalogSearchRejectsInvalidQuery(t *testing.T) {
 }
 
 func TestCatalogSearchReturnsEmptyResultsWithoutCreatingDish(t *testing.T) {
-	app, err := server.New(server.Config{
-		DatabasePath: filepath.Join(t.TempDir(), "what-to-eat.db"),
-		CatalogDir:   filepath.Join("testdata", "catalog"),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	app := openCatalogApp(t, "")
 	t.Cleanup(func() { app.Close() })
-
-	registerRequest := httptest.NewRequest(
-		http.MethodPost,
-		"/api/auth/register",
-		bytes.NewBufferString(`{"username":"empty_search_eater","password":"correct horse battery staple"}`),
-	)
-	registerRequest.Header.Set("Content-Type", "application/json")
-	registerResponse := httptest.NewRecorder()
-	app.ServeHTTP(registerResponse, registerRequest)
-	if registerResponse.Code != http.StatusCreated {
-		t.Fatalf("register status = %d, want %d", registerResponse.Code, http.StatusCreated)
-	}
-	sessionCookie := registerResponse.Result().Cookies()[0]
+	sessionCookie := registerCatalogEater(t, app)
 
 	for range 2 {
 		request := httptest.NewRequest(http.MethodGet, "/api/catalog/dishes?q=不存在的自由文本", nil)
