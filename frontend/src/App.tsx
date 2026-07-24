@@ -14,7 +14,14 @@ import {
   Tag,
   Typography,
 } from "antd";
-import { Link, Navigate, Route, Routes } from "react-router-dom";
+import {
+  Link,
+  Navigate,
+  Route,
+  Routes,
+  useNavigate,
+  useSearchParams,
+} from "react-router-dom";
 
 type Account = {
   id: number;
@@ -43,8 +50,26 @@ type CandidateDish = Dish & {
   preference_weight: number;
 };
 
-type MealResume = {
-  status: "candidate_pool_empty" | "ready";
+type MealDecision = {
+  id: number;
+  meal_id: number;
+  mode: "pool";
+  dish: Dish;
+};
+
+type MealResume =
+  | { status: "candidate_pool_empty" | "ready" }
+  | { status: "active_decision"; decision: MealDecision };
+
+type Recipe = {
+  dish: Dish;
+  content: string;
+};
+
+type AcceptanceResult = {
+  recipe: {
+    dish: Dish;
+  };
 };
 
 async function requestJSON<T>(path: string, init?: RequestInit): Promise<T> {
@@ -174,14 +199,50 @@ function AuthPage({ onAuthenticated }: { onAuthenticated: (account: Account) => 
 function HomePage({ account }: { account: Account }) {
   const [resume, setResume] = useState<MealResume>();
   const [error, setError] = useState<string>();
+  const [submitting, setSubmitting] = useState(false);
+  const navigate = useNavigate();
+
+  async function loadMeal() {
+    try {
+      setResume(await requestJSON<MealResume>("/api/meals/resume"));
+      setError(undefined);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "无法恢复 Meal 状态");
+    }
+  }
 
   useEffect(() => {
-    requestJSON<MealResume>("/api/meals/resume")
-      .then(setResume)
-      .catch((cause) => {
-        setError(cause instanceof Error ? cause.message : "无法恢复 Meal 状态");
-      });
+    void loadMeal();
   }, []);
+
+  async function beginMeal() {
+    setSubmitting(true);
+    setError(undefined);
+    try {
+      setResume(await requestJSON<MealResume>("/api/meals", { method: "POST" }));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "无法开始 Meal");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function acceptDecision(decisionID: number) {
+    setSubmitting(true);
+    setError(undefined);
+    try {
+      const accepted = await requestJSON<AcceptanceResult>(
+        `/api/decisions/${decisionID}/accept`,
+        { method: "POST" },
+      );
+      navigate(
+        `/recipes?dish_id=${encodeURIComponent(accepted.recipe.dish.recipe_path)}`,
+      );
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "无法完成 Acceptance");
+      setSubmitting(false);
+    }
+  }
 
   return (
     <main className="page-shell">
@@ -226,12 +287,116 @@ function HomePage({ account }: { account: Account }) {
                 message="Meal 已就绪"
                 description="Candidate pool 中已有可用于下一次 Decision 的 Dish。"
               />
-              <Link to="/candidate-pool">
-                <Button block type="primary" size="large">
-                  管理 Candidate pool
-                </Button>
-              </Link>
+              <Button
+                block
+                type="primary"
+                size="large"
+                loading={submitting}
+                onClick={() => {
+                  void beginMeal();
+                }}
+              >
+                开始这一顿
+              </Button>
+              <Typography.Text type="secondary">
+                想先调整选择范围？<Link to="/candidate-pool">管理 Candidate pool</Link>
+              </Typography.Text>
             </>
+          )}
+
+          {resume?.status === "active_decision" && (
+            <section className="decision" aria-labelledby="decision-heading">
+              <Space direction="vertical" size={20} className="full-width">
+                <Tag color="orange">普通 Pool pick</Tag>
+                <div>
+                  <Typography.Text type="secondary">{resume.decision.dish.category}</Typography.Text>
+                  <Typography.Title id="decision-heading" level={2}>
+                    {resume.decision.dish.name}
+                  </Typography.Title>
+                </div>
+                <div className="decision-actions" aria-label="Decision 操作">
+                  <Button
+                    block
+                    size="large"
+                    disabled
+                    title="Reroll 将在下一功能切片启用"
+                  >
+                    Reroll
+                  </Button>
+                  <Button
+                    block
+                    type="primary"
+                    size="large"
+                    loading={submitting}
+                    onClick={() => {
+                      void acceptDecision(resume.decision.id);
+                    }}
+                  >
+                    就吃这个（Acceptance）
+                  </Button>
+                </div>
+              </Space>
+            </section>
+          )}
+        </Space>
+      </Card>
+    </main>
+  );
+}
+
+function RecipePage({ account }: { account: Account }) {
+  const [searchParams] = useSearchParams();
+  const dishID = searchParams.get("dish_id");
+  const [recipe, setRecipe] = useState<Recipe>();
+  const [error, setError] = useState<string>();
+
+  useEffect(() => {
+    if (!dishID) {
+      setError("Recipe 不存在");
+      return;
+    }
+    requestJSON<Recipe>(`/api/catalog/recipes?dish_id=${encodeURIComponent(dishID)}`)
+      .then(setRecipe)
+      .catch((cause) => {
+        setError(cause instanceof Error ? cause.message : "无法读取 Recipe");
+      });
+  }, [dishID]);
+
+  return (
+    <main className="page-shell">
+      <Card className="page-card" bordered={false}>
+        <Space direction="vertical" size={24} className="full-width">
+          <header className="page-header">
+            <div className="page-header-row">
+              <Typography.Text type="secondary">你好，{account.username}</Typography.Text>
+              <Link to="/">开始下一顿</Link>
+            </div>
+            <Typography.Title level={1}>Recipe</Typography.Title>
+          </header>
+
+          {error && <Alert type="error" showIcon message={error} />}
+          {!recipe && !error && (
+            <div className="inline-loading" aria-label="正在读取 Recipe">
+              <Spin />
+            </div>
+          )}
+          {recipe && (
+            <article aria-labelledby="recipe-heading">
+              <Space direction="vertical" size={16} className="full-width">
+                <div>
+                  <Tag color="orange">{recipe.dish.category}</Tag>
+                  <Typography.Title id="recipe-heading" level={2}>
+                    {recipe.dish.name}
+                  </Typography.Title>
+                  <Typography.Text type="secondary" className="recipe-path">
+                    {recipe.dish.id}
+                  </Typography.Text>
+                </div>
+                <Typography.Paragraph className="recipe-content">
+                  {recipe.content}
+                </Typography.Paragraph>
+              </Space>
+            </article>
           )}
         </Space>
       </Card>
@@ -558,6 +723,12 @@ export function WhatToEatApp() {
         path="/candidate-pool"
         element={
           account ? <CandidatePoolPage account={account} /> : <Navigate to="/login" replace />
+        }
+      />
+      <Route
+        path="/recipes"
+        element={
+          account ? <RecipePage account={account} /> : <Navigate to="/login" replace />
         }
       />
       <Route

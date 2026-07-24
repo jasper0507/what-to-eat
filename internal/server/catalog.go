@@ -2,15 +2,24 @@ package server
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"io/fs"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/gin-gonic/gin"
 )
 
 const maxRecipeBytes = 2 << 20
+
+type recipeResponse struct {
+	Dish    catalogDishResponse `json:"dish"`
+	Content string              `json:"content"`
+}
 
 var howToCookCategories = map[string]string{
 	"aquatic":        "水产",
@@ -43,6 +52,36 @@ func catalogDish(sourcePath, name string) catalogDishResponse {
 	}
 	dish.Tags = pathParts[1 : len(pathParts)-1]
 	return dish
+}
+
+func (a *App) getRecipe(context *gin.Context) {
+	if _, ok := a.currentAccount(context); !ok {
+		return
+	}
+	dishID := context.Query("dish_id")
+	if !validDishID(dishID) {
+		writeError(context, http.StatusBadRequest, "invalid_request", "Dish 无效")
+		return
+	}
+
+	var name, content string
+	err := a.db.QueryRowContext(
+		context,
+		"SELECT name, recipe FROM catalog_dishes WHERE source_path = ?",
+		dishID,
+	).Scan(&name, &content)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(context, http.StatusNotFound, "recipe_not_found", "Recipe 不存在")
+		return
+	}
+	if err != nil {
+		writeInternalError(context, "read Recipe", err)
+		return
+	}
+	context.JSON(http.StatusOK, recipeResponse{
+		Dish:    catalogDish(dishID, name),
+		Content: content,
+	})
 }
 
 func migrateLegacyCatalogSchema(db *sql.DB) error {

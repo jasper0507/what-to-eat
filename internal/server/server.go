@@ -96,6 +96,34 @@ func New(config Config) (*App, error) {
 			),
 			PRIMARY KEY (account_id, dish_id)
 		);
+		CREATE TABLE IF NOT EXISTS meals (
+			id INTEGER PRIMARY KEY,
+			account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+			status TEXT NOT NULL CHECK (status IN ('active', 'accepted')),
+			created_at INTEGER NOT NULL
+		);
+		CREATE UNIQUE INDEX IF NOT EXISTS one_active_meal_per_account
+			ON meals(account_id) WHERE status = 'active';
+		CREATE TABLE IF NOT EXISTS decisions (
+			id INTEGER PRIMARY KEY,
+			meal_id INTEGER NOT NULL REFERENCES meals(id) ON DELETE CASCADE,
+			dish_id TEXT NOT NULL REFERENCES catalog_dishes(source_path),
+			mode TEXT NOT NULL CHECK (mode = 'pool'),
+			status TEXT NOT NULL CHECK (status IN ('active', 'accepted')),
+			created_at INTEGER NOT NULL
+		);
+		CREATE UNIQUE INDEX IF NOT EXISTS one_active_decision_per_meal
+			ON decisions(meal_id) WHERE status = 'active';
+		CREATE TABLE IF NOT EXISTS eating_records (
+			id INTEGER PRIMARY KEY,
+			account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+			sequence INTEGER NOT NULL CHECK (sequence > 0),
+			meal_id INTEGER NOT NULL UNIQUE REFERENCES meals(id) ON DELETE CASCADE,
+			decision_id INTEGER NOT NULL UNIQUE REFERENCES decisions(id),
+			dish_id TEXT NOT NULL REFERENCES catalog_dishes(source_path),
+			accepted_at INTEGER NOT NULL,
+			UNIQUE (account_id, sequence)
+		);
 	`); err != nil {
 		db.Close()
 		return nil, err
@@ -122,7 +150,7 @@ func New(config Config) (*App, error) {
 		secureCookies:     config.SecureCookies,
 		dummyPasswordHash: dummyPasswordHash,
 		loginFailures:     make(map[string]loginFailureWindow),
-		mealLifecycle:     &mealLifecycle{db: db},
+		mealLifecycle:     newMealLifecycle(db, newDecisionRandom()),
 	}
 	app.routes(config.WebDir)
 	return app, nil
@@ -139,12 +167,14 @@ func (a *App) routes(webDir string) {
 	router.POST("/api/auth/login", a.login)
 	router.GET("/api/auth/session", a.session)
 	router.GET("/api/catalog/dishes", a.searchCatalog)
+	router.GET("/api/catalog/recipes", a.getRecipe)
 	router.GET("/api/candidate-pool/dishes", a.listCandidatePool)
 	router.POST("/api/candidate-pool/dishes", a.addCandidatePoolDish)
 	router.PATCH("/api/candidate-pool/dishes", a.updateCandidatePoolDish)
 	router.DELETE("/api/candidate-pool/dishes", a.removeCandidatePoolDish)
 	router.GET("/api/meals/resume", a.resumeMeal)
 	router.POST("/api/meals", a.beginMeal)
+	router.POST("/api/decisions/:decisionID/accept", a.acceptDecision)
 	if webDir != "" {
 		indexPath := filepath.Join(webDir, "index.html")
 		router.Static("/assets", filepath.Join(webDir, "assets"))

@@ -95,6 +95,39 @@ body {
   place-items: center;
 }
 
+.decision {
+  border: 1px solid #f3d4ae;
+  border-radius: 14px;
+  padding: clamp(20px, 5vw, 36px);
+  background: #fffaf3;
+  text-align: center;
+}
+
+.decision .ant-tag {
+  align-self: center;
+}
+
+.decision h2 {
+  margin-block: 8px 0;
+  font-size: clamp(2.25rem, 8vw, 4rem);
+}
+
+.decision-actions {
+  display: grid;
+  grid-template-columns: 1fr 1.35fr;
+  gap: 12px;
+}
+
+.recipe-content {
+  margin: 0;
+  padding: 20px;
+  border-radius: 12px;
+  background: #fffaf3;
+  font-family: inherit;
+  line-height: 1.8;
+  white-space: pre-wrap;
+}
+
 .recipe-path {
   overflow-wrap: anywhere;
 }
@@ -139,5 +172,9 @@ body {
   .catalog-result .ant-btn,
   .pool-item .ant-btn {
     width: 100%;
+  }
+
+  .decision-actions {
+    grid-template-columns: 1fr;
   }
 }
