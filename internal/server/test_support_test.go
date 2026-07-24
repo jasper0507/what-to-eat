@@ -19,6 +19,8 @@ type ScriptedNIMStep struct {
 	Complete    bool
 	Preferences map[string]float64
 	Error       string
+	Started     chan<- struct{}
+	Release     <-chan struct{}
 }
 
 type scriptedNIM struct {
@@ -26,14 +28,24 @@ type scriptedNIM struct {
 }
 
 func (s *scriptedNIM) Respond(
-	context.Context,
-	[]onboardingMessage,
+	callContext context.Context,
+	_ []onboardingMessage,
 ) (nimInterviewResult, error) {
 	if len(s.steps) == 0 {
 		return nimInterviewResult{}, errors.New("scripted NIM has no response")
 	}
 	step := s.steps[0]
 	s.steps = s.steps[1:]
+	if step.Started != nil {
+		close(step.Started)
+	}
+	if step.Release != nil {
+		select {
+		case <-step.Release:
+		case <-callContext.Done():
+			return nimInterviewResult{}, callContext.Err()
+		}
+	}
 	if step.Error != "" {
 		return nimInterviewResult{}, errors.New(step.Error)
 	}

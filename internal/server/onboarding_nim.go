@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -74,8 +75,13 @@ func newNIMAdapter(config *NIMConfig) (onboardingNIM, error) {
 		baseURL = defaultNIMBaseURL
 	}
 	parsed, err := url.Parse(baseURL)
-	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
-		return nil, errors.New("NIM BaseURL must be an absolute HTTP(S) URL")
+	if err != nil || parsed.Host == "" {
+		return nil, errors.New("NIM BaseURL must be an absolute HTTPS URL")
+	}
+	hostIP := net.ParseIP(parsed.Hostname())
+	isLoopback := parsed.Hostname() == "localhost" || (hostIP != nil && hostIP.IsLoopback())
+	if parsed.Scheme != "https" && !(parsed.Scheme == "http" && isLoopback) {
+		return nil, errors.New("NIM BaseURL must use HTTPS outside loopback")
 	}
 	model := config.Model
 	if model == "" {

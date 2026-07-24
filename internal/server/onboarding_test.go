@@ -1,6 +1,7 @@
 package server_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -294,6 +295,57 @@ func TestOnboardingNIMCallsAreRateLimitedPerAccount(t *testing.T) {
 	}
 }
 
+func TestSlowOnboardingCallDoesNotBlockAnotherAccount(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	app := openOnboardingApp(t, filepath.Join(t.TempDir(), "what-to-eat.db"), []server.ScriptedNIMStep{{
+		Reply:   "继续聊聊。",
+		Started: started,
+		Release: release,
+	}})
+	t.Cleanup(func() { app.Close() })
+	slowCookie := registerCandidateEater(t, app, "slow_eater")
+	otherCookie := registerCandidateEater(t, app, "unblocked_eater")
+
+	slowDone := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		request := httptest.NewRequest(
+			http.MethodPost,
+			"/api/onboarding/interview/messages",
+			bytes.NewBufferString(`{"message":"我喜欢番茄炒蛋"}`),
+		)
+		request.Header.Set("Content-Type", "application/json")
+		request.AddCookie(slowCookie)
+		response := httptest.NewRecorder()
+		app.ServeHTTP(response, request)
+		slowDone <- response
+	}()
+	<-started
+
+	otherDone := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		request := httptest.NewRequest(http.MethodGet, "/api/onboarding/interview", nil)
+		request.AddCookie(otherCookie)
+		response := httptest.NewRecorder()
+		app.ServeHTTP(response, request)
+		otherDone <- response
+	}()
+
+	select {
+	case response := <-otherDone:
+		if response.Code != http.StatusOK {
+			t.Errorf("other Account status = %d, want %d", response.Code, http.StatusOK)
+		}
+	case <-time.After(time.Second):
+		close(release)
+		t.Fatal("slow NIM call blocked another Account")
+	}
+	close(release)
+	if response := <-slowDone; response.Code != http.StatusOK {
+		t.Errorf("slow Account status = %d, want %d", response.Code, http.StatusOK)
+	}
+}
+
 func TestNIMAPIKeyStaysAtTheServerBoundary(t *testing.T) {
 	const apiKey = "test-nvidia-secret"
 	var authorization, providerRequest string
@@ -350,5 +402,22 @@ func TestNIMAPIKeyStaysAtTheServerBoundary(t *testing.T) {
 	}
 	if strings.Contains(response.Body.String(), apiKey) {
 		t.Error("public response contains API key")
+	}
+}
+
+func TestNIMAPIKeyRejectsInsecureRemoteEndpoint(t *testing.T) {
+	app, err := server.New(server.Config{
+		DatabasePath: filepath.Join(t.TempDir(), "what-to-eat.db"),
+		NIM: &server.NIMConfig{
+			APIKey:  "must-not-cross-plaintext-http",
+			BaseURL: "http://nim.example.com/v1",
+		},
+	})
+	if err == nil {
+		app.Close()
+		t.Fatal("New accepted a non-loopback HTTP NIM endpoint")
+	}
+	if !strings.Contains(err.Error(), "must use HTTPS") {
+		t.Errorf("New error = %q, want HTTPS requirement", err)
 	}
 }

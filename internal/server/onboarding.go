@@ -62,17 +62,20 @@ type onboardingRateWindow struct {
 }
 
 type onboardingInterview struct {
-	db   *sql.DB
-	nim  onboardingNIM
-	mu   sync.Mutex
-	rate map[int64]onboardingRateWindow
+	db      *sql.DB
+	nim     onboardingNIM
+	locksMu sync.Mutex
+	locks   map[int64]*sync.Mutex
+	rateMu  sync.Mutex
+	rate    map[int64]onboardingRateWindow
 }
 
 func newOnboardingInterview(db *sql.DB, nim onboardingNIM) *onboardingInterview {
 	return &onboardingInterview{
-		db:   db,
-		nim:  nim,
-		rate: make(map[int64]onboardingRateWindow),
+		db:    db,
+		nim:   nim,
+		locks: make(map[int64]*sync.Mutex),
+		rate:  make(map[int64]onboardingRateWindow),
 	}
 }
 
@@ -80,8 +83,9 @@ func (o *onboardingInterview) State(
 	context context.Context,
 	accountID int64,
 ) (onboardingState, error) {
-	o.mu.Lock()
-	defer o.mu.Unlock()
+	lock := o.accountLock(accountID)
+	lock.Lock()
+	defer lock.Unlock()
 	return o.state(context, accountID)
 }
 
@@ -104,8 +108,9 @@ func (o *onboardingInterview) Manual(
 	context context.Context,
 	accountID int64,
 ) (onboardingState, error) {
-	o.mu.Lock()
-	defer o.mu.Unlock()
+	lock := o.accountLock(accountID)
+	lock.Lock()
+	defer lock.Unlock()
 
 	state, err := o.state(context, accountID)
 	if err != nil {
@@ -136,9 +141,9 @@ func (o *onboardingInterview) exchange(
 	message string,
 	retry bool,
 ) (onboardingState, error) {
-	// ponytail: one lock keeps per-Account exchanges atomic; use keyed locks if NIM throughput matters.
-	o.mu.Lock()
-	defer o.mu.Unlock()
+	lock := o.accountLock(accountID)
+	lock.Lock()
+	defer lock.Unlock()
 
 	state, err := o.state(context, accountID)
 	if err != nil {
@@ -385,6 +390,9 @@ func (o *onboardingInterview) messages(
 }
 
 func (o *onboardingInterview) allowNIMCall(accountID int64, now time.Time) bool {
+	o.rateMu.Lock()
+	defer o.rateMu.Unlock()
+
 	window, exists := o.rate[accountID]
 	if !exists || !now.Before(window.expiresAt) {
 		o.rate[accountID] = onboardingRateWindow{
@@ -399,6 +407,17 @@ func (o *onboardingInterview) allowNIMCall(accountID int64, now time.Time) bool 
 	window.count++
 	o.rate[accountID] = window
 	return true
+}
+
+func (o *onboardingInterview) accountLock(accountID int64) *sync.Mutex {
+	o.locksMu.Lock()
+	defer o.locksMu.Unlock()
+	lock := o.locks[accountID]
+	if lock == nil {
+		lock = &sync.Mutex{}
+		o.locks[accountID] = lock
+	}
+	return lock
 }
 
 func (a *App) getOnboardingInterview(context *gin.Context) {
