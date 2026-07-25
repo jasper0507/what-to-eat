@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>第 1 课：独立验收 What2Eat v1</title>
+  <link rel="stylesheet" href="../assets/lesson.css">
+</head>
+<body>
+<main>
+  <p class="meta">What2Eat 验收课 · 约 35–50 分钟</p>
+  <h1>你不是在“点一点”，而是在收集发布证据</h1>
+  <p class="lede">
+    这节课的目标，是让你独立回答一个二元问题：当前 commit 是否可以作为 v1 发布？
+    最终证据来自自动化、真实浏览器旅程、真机、持久化和恢复演练五个层面。
+  </p>
+
+  <div class="grid">
+    <section class="card">
+      <h3>自动化证明</h3>
+      <p>已编码的规则没有回归，主流桌面与移动视口能跑通。</p>
+    </section>
+    <section class="card">
+      <h3>手工证明</h3>
+      <p>真实 NIM、真实触控、文案和完整用户心智链路可用。</p>
+    </section>
+    <section class="card">
+      <h3>恢复证明</h3>
+      <p>容器可替换、卷可复用，备份真的能恢复，而不只是“文件存在”。</p>
+    </section>
+  </div>
+
+  <h2>1. 建立隔离的验收环境</h2>
+  <p>
+    使用独立 Compose project，避免碰到现有数据。Docker 的命名卷会在后续启动中复用；
+    <code>up --wait</code> 会等待服务进入 running/healthy 状态，依据见
+    <a href="https://docs.docker.com/reference/cli/docker/compose/up/">Docker Compose up</a>
+    和 <a href="https://docs.docker.com/reference/compose-file/volumes/">volumes 参考</a>。
+  </p>
+  <pre><code>git pull --ff-only
+install -m 600 .env.example .env.acceptance
+openssl rand -base64 32
+
+# 编辑 .env.acceptance：填入真实 NVIDIA_API_KEY，并把生成值填入 SESSION_SECRET
+docker compose --env-file .env.acceptance -p what2eat_acceptance up --build -d --wait
+docker compose --env-file .env.acceptance -p what2eat_acceptance ps
+curl -fsS http://127.0.0.1:8080/api/healthz</code></pre>
+  <div class="warning">
+    <strong>停下来检查：</strong>不要把终端里的秘密、<code>.env.acceptance</code> 或数据库备份截图上传到 issue。
+    如果 8080 被占用，先停止占用者；不要随手改正式 Compose 配置来“通过验收”。
+  </div>
+
+  <h2>2. 先跑自动化门禁</h2>
+  <pre><code>go test ./...
+go vet ./...
+
+cd frontend
+npm run typecheck
+npm run test:browser
+cd ..</code></pre>
+  <p>
+    四条命令都应以退出码 0 结束。浏览器测试使用仓库的可控测试服务，不消费真实 NIM
+    配额；它证明已写入测试的行为，不证明真实密钥、真实网络或真机触控正常。
+  </p>
+
+  <h2>3. 完成真实桌面旅程</h2>
+  <ol>
+    <li>用全新用户名注册，确认进入 Onboarding，而不是空白页或登录页。</li>
+    <li>在访谈中明确提到 Catalog 里的菜，例如“番茄牛肉蛋花汤”和“番茄红酱”，确认建议来自服务端真实 NIM 调用，且可加入 Candidate pool。</li>
+    <li>在 Candidate pool 搜索、添加、删除一道菜，并调整权重；刷新页面后状态仍在。</li>
+    <li>保持一个很小的池（1–2 道），开始 Meal，执行一次 Reroll，再 Accept；确认 Recipe 可阅读。</li>
+    <li>继续下一顿，观察小池/冷却压力下的 Discovery 标识和推荐理由；接受后进入下一顿并提交 Pending rating。</li>
+    <li>退出后重新登录，确认 Candidate pool、Meal、rating 状态仍可访问。</li>
+  </ol>
+  <div class="callout">
+    NIM 的聊天接口与 OpenAI Chat Completions 兼容，真实验收要证明请求确实穿过 Go
+    服务，而不是只证明前端页面能打开。接口语义可对照
+    <a href="https://docs.nvidia.com/nim/large-language-models/latest/reference/api-reference.html">NVIDIA NIM API 参考</a>。
+  </div>
+
+  <h2>4. 检查 Cookie 与真机</h2>
+  <p>
+    在浏览器 Network 面板查看注册或登录响应，确认会话 Cookie 带
+    <code>Secure</code>、<code>HttpOnly</code> 和 <code>SameSite=Lax</code>。
+    <code>Secure</code> Cookie 除 localhost 特例外只通过 HTTPS 发送，所以局域网
+    <code>http://192.168…</code> 不是有效的正式真机验收入口。依据见
+    <a href="https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Set-Cookie">MDN Set-Cookie</a>。
+  </p>
+  <ul>
+    <li>先用 Chrome Device Mode 的 390×844 视口预检：无横向滚动、主按钮可见、软键盘不遮住当前输入。</li>
+    <li>再用至少一台实际手机，通过 HTTPS URL 完成注册、Onboarding、选菜、Reroll、Accept 和 Rating。</li>
+    <li>旋转屏幕一次，并检查长菜名、Recipe、错误提示和加载状态。</li>
+  </ul>
+  <p>
+    Device Mode 官方也将其定位为移动体验的近似模拟，因此它不能替代真机：
+    <a href="https://developer.chrome.com/docs/devtools/device-mode">Chrome Device Mode</a>。
+  </p>
+
+  <h2>5. 证明容器可替换、数据不可丢</h2>
+  <p>在已经创建账户和 Meal 状态之后执行：</p>
+  <pre><code>docker compose --env-file .env.acceptance -p what2eat_acceptance \
+  up -d --force-recreate --wait app</code></pre>
+  <p>
+    重新登录，逐项确认账户、Candidate pool、Meal、Pending rating 与 Taste rating
+    仍在。失败意味着“容器重建不丢数据”未达到验收条件，应保存
+    <code>docker compose ... logs app</code> 后停止发布。
+  </p>
+
+  <h2>6. 做一次真的备份与恢复</h2>
+  <p>
+    严格按仓库 <a href="../README.md">README 的“备份与恢复”</a> 操作：把每次 Compose
+    调用改为 <code>docker compose --env-file .env.acceptance -p what2eat_acceptance …</code>，
+    把命令中的 <code>.env</code> 文件名替换为 <code>.env.acceptance</code>，并使用新的带日期
+    备份目录。备份后先改变一项容易识别的状态，再恢复数据库和配套 env。
+  </p>
+  <p>恢复通过的证据不是“命令没报错”，而是：</p>
+  <ul>
+    <li>原 Account 可以登录；</li>
+    <li>恢复前快照中的 Candidate pool、Meal 和 rating 都存在；</li>
+    <li>备份后故意增加的那项状态消失，证明读取的是恢复快照；</li>
+    <li>应用日志没有 SQLite 权限或 session 解密错误。</li>
+  </ul>
+  <div class="warning">
+    数据库和当时的 <code>SESSION_SECRET</code> 必须成对保管。恢复演练不要使用
+    <code>down -v</code>；它会删除命名卷。
+  </div>
+
+  <h2>7. 做发布判断</h2>
+  <p>
+    打开并打印（或直接在浏览器勾选）
+    <a href="../reference/v1-acceptance-checklist.html">v1 验收清单</a>。
+    所有必选项通过，且没有 P0/P1 缺陷时，才建议关闭 #11 和 v1 父 issue，并打
+    <code>v0.1.0</code> 标签。
+  </p>
+  <div class="success">
+    <strong>你的练习：</strong>亲自完成清单，在每个分区至少留一条证据（命令结果摘要、URL、
+    非敏感截图或日志时间点）。把结果发给我，我会检查证据是否足够，但不替你勾选。
+  </div>
+
+  <h2>8. 清理隔离环境</h2>
+  <pre><code>docker compose --env-file .env.acceptance -p what2eat_acceptance down -v</code></pre>
+  <p>
+    这会删除名为 <code>what2eat_acceptance</code> 的验收容器、网络和卷；请先确认备份演练
+    已结束，而且没有把正式数据放进这个 project。保留的备份目录仍需按敏感数据处理。
+  </p>
+
+  <footer>
+    本课对应学习目标见 <a href="../MISSION.md">MISSION.md</a>；权威来源目录见
+    <a href="../RESOURCES.md">RESOURCES.md</a>。
+  </footer>
+</main>
+</body>
+</html>
