@@ -1,6 +1,7 @@
 package server
 
 import (
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
@@ -26,6 +27,7 @@ import (
 
 type Config struct {
 	DatabasePath  string
+	SessionSecret []byte
 	SecureCookies bool
 	WebDir        string
 	CatalogDir    string
@@ -36,6 +38,7 @@ type Config struct {
 type App struct {
 	db                *sql.DB
 	router            *gin.Engine
+	sessionSecret     []byte
 	secureCookies     bool
 	dummyPasswordHash []byte
 	loginFailures     map[string]loginFailureWindow
@@ -80,13 +83,19 @@ func newApp(
 	decisionRandom *mathrand.Rand,
 	nim onboardingNIM,
 ) (*App, error) {
+	if config.DatabasePath == "" {
+		return nil, errors.New("DatabasePath is required")
+	}
+	if len(config.SessionSecret) < 32 {
+		return nil, errors.New("SessionSecret must contain at least 32 bytes")
+	}
 	discovery, err := normalizeDiscoveryConfig(config.Discovery)
 	if err != nil {
 		return nil, fmt.Errorf("configure Discovery: %w", err)
 	}
 	db, err := sql.Open("sqlite", config.DatabasePath)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("open SQLite database %q: %w", config.DatabasePath, err)
 	}
 	db.SetMaxOpenConns(1)
 
@@ -163,7 +172,7 @@ func newApp(
 		);
 	`); err != nil {
 		db.Close()
-		return nil, err
+		return nil, fmt.Errorf("initialize SQLite database %q: %w", config.DatabasePath, err)
 	}
 	if err := migrateLegacyCatalogSchema(db); err != nil {
 		db.Close()
@@ -196,6 +205,7 @@ func newApp(
 
 	app := &App{
 		db:                db,
+		sessionSecret:     append([]byte(nil), config.SessionSecret...),
 		secureCookies:     config.SecureCookies,
 		dummyPasswordHash: dummyPasswordHash,
 		loginFailures:     make(map[string]loginFailureWindow),
@@ -297,7 +307,7 @@ func (a *App) register(context *gin.Context) {
 		return
 	}
 
-	token, tokenHash, expiresAt, err := newSession()
+	token, tokenHash, expiresAt, err := newSession(a.sessionSecret)
 	if err != nil {
 		writeInternalError(context, "generate registration session", err)
 		return
@@ -358,7 +368,7 @@ func (a *App) login(context *gin.Context) {
 		return
 	}
 
-	token, tokenHash, expiresAt, err := newSession()
+	token, tokenHash, expiresAt, err := newSession(a.sessionSecret)
 	if err != nil {
 		writeInternalError(context, "generate login session", err)
 		return
@@ -425,7 +435,7 @@ func (a *App) currentAccount(context *gin.Context) (accountResponse, bool) {
 		return accountResponse{}, false
 	}
 
-	tokenHash := sha256.Sum256([]byte(cookie))
+	tokenHash := hashSessionToken(a.sessionSecret, cookie)
 	var account accountResponse
 	err = a.db.QueryRowContext(
 		context,
@@ -433,7 +443,7 @@ func (a *App) currentAccount(context *gin.Context) (accountResponse, bool) {
 		 FROM sessions
 		 JOIN accounts ON accounts.id = sessions.account_id
 		 WHERE sessions.token_hash = ? AND sessions.expires_at > ?`,
-		tokenHash[:],
+		tokenHash,
 		time.Now().Unix(),
 	).Scan(&account.ID, &account.Username)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -490,14 +500,19 @@ func (a *App) searchCatalog(context *gin.Context) {
 	context.JSON(http.StatusOK, gin.H{"dishes": dishes})
 }
 
-func newSession() (token string, tokenHash []byte, expiresAt time.Time, err error) {
+func newSession(secret []byte) (token string, tokenHash []byte, expiresAt time.Time, err error) {
 	randomBytes := make([]byte, 32)
 	if _, err = rand.Read(randomBytes); err != nil {
 		return "", nil, time.Time{}, err
 	}
 	token = base64.RawURLEncoding.EncodeToString(randomBytes)
-	hash := sha256.Sum256([]byte(token))
-	return token, hash[:], time.Now().Add(30 * 24 * time.Hour), nil
+	return token, hashSessionToken(secret, token), time.Now().Add(30 * 24 * time.Hour), nil
+}
+
+func hashSessionToken(secret []byte, token string) []byte {
+	hash := hmac.New(sha256.New, secret)
+	_, _ = hash.Write([]byte(token))
+	return hash.Sum(nil)
 }
 
 func (a *App) setSessionCookie(context *gin.Context, token string, expiresAt time.Time) {

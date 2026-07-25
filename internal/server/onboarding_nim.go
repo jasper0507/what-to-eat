@@ -28,10 +28,11 @@ complete 仅在 Eater 已明确给出至少一道具体菜名且偏好足够建�
 weight 必须在 1 到 5 之间，越喜欢越高。不要创造 Dish ID；服务端只会接受 Catalog 中名称完全匹配的 Dish。`
 
 type NIMConfig struct {
-	APIKey  string
-	BaseURL string
-	Model   string
-	Timeout time.Duration
+	APIKey   string
+	BaseURL  string
+	Model    string
+	Timeout  time.Duration
+	Required bool
 }
 
 type onboardingNIM interface {
@@ -67,6 +68,9 @@ type nimPreference struct {
 
 func newNIMAdapter(config *NIMConfig) (onboardingNIM, error) {
 	if config == nil || config.APIKey == "" {
+		if config != nil && config.Required {
+			return nil, errors.New("NVIDIA API key is required")
+		}
 		return unavailableNIM{}, nil
 	}
 

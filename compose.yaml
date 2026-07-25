@@ -6,7 +6,8 @@ services:
     volumes:
       - what_to_eat_data:/app/data
     environment:
-      NVIDIA_API_KEY: ${NVIDIA_API_KEY:-}
+      SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET in .env}
+      NVIDIA_API_KEY: ${NVIDIA_API_KEY:?set NVIDIA_API_KEY in .env}
       NIM_BASE_URL: ${NIM_BASE_URL:-}
       NIM_MODEL: ${NIM_MODEL:-}
     restart: unless-stopped

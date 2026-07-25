@@ -1,5 +1,7 @@
 import { expect, test } from "@playwright/test";
 
+import { addCandidatePoolDish } from "./browser-api";
+
 test("Discovery recipe handoff leads to labeled Pending rating before the next Decision", async ({
   page,
 }, testInfo) => {
@@ -10,13 +12,9 @@ test("Discovery recipe handoff leads to labeled Pending rating before the next D
   await page.getByRole("button", { name: "创建 Account" }).click();
   await expect(page.getByRole("heading", { name: "先聊聊你爱吃什么" })).toBeVisible();
 
-  const addResponse = await page.request.post("/api/candidate-pool/dishes", {
-    data: {
-      dish_id: "vegetable_dish/番茄炒蛋.md",
-      preference_weight: 5,
-    },
-  });
-  expect(addResponse.ok()).toBe(true);
+  expect(
+    await addCandidatePoolDish(page, "vegetable_dish/番茄炒蛋.md", 5),
+  ).toBe(true);
 
   await page.goto("/");
   await page.getByRole("button", { name: "开始这一顿" }).click();

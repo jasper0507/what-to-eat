@@ -1,5 +1,7 @@
 import { expect, test } from "@playwright/test";
 
+import { addCandidatePoolDish } from "./browser-api";
+
 test("Eater can Reroll and accept the replacement Decision", async ({
   page,
 }, testInfo) => {
@@ -14,10 +16,7 @@ test("Eater can Reroll and accept the replacement Decision", async ({
     "vegetable_dish/番茄炒蛋.md",
     "meat_dish/番茄牛腩.md",
   ]) {
-    const response = await page.request.post("/api/candidate-pool/dishes", {
-      data: { dish_id: dish, preference_weight: 1 },
-    });
-    expect(response.ok()).toBe(true);
+    expect(await addCandidatePoolDish(page, dish, 1)).toBe(true);
   }
 
   await page.goto("/");

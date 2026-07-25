@@ -190,9 +190,10 @@ func openCatalogAppWithDiscovery(
 ) *server.App {
 	t.Helper()
 	config := server.Config{
-		DatabasePath: filepath.Join(t.TempDir(), "what-to-eat.db"),
-		CatalogDir:   filepath.Join("testdata", "catalog"),
-		Discovery:    &discovery,
+		DatabasePath:  filepath.Join(t.TempDir(), "what-to-eat.db"),
+		SessionSecret: testSessionSecret,
+		CatalogDir:    filepath.Join("testdata", "catalog"),
+		Discovery:     &discovery,
 	}
 	app, err := server.NewWithDecisionRandomSeedForTest(config, seed)
 	if err != nil {

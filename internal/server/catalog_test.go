@@ -26,9 +26,10 @@ func openCatalogAppWithDecisionSeed(
 		databasePath = filepath.Join(t.TempDir(), "what-to-eat.db")
 	}
 	config := server.Config{
-		DatabasePath: databasePath,
-		CatalogDir:   filepath.Join("testdata", "catalog"),
-		Discovery:    &server.DiscoveryConfig{Enabled: false},
+		DatabasePath:  databasePath,
+		SessionSecret: testSessionSecret,
+		CatalogDir:    filepath.Join("testdata", "catalog"),
+		Discovery:     &server.DiscoveryConfig{Enabled: false},
 	}
 	var app *server.App
 	var err error
@@ -226,9 +227,10 @@ func TestAppUpgradesPoolOnlyDecisionSchemaForDiscovery(t *testing.T) {
 	discovery := server.DefaultDiscoveryConfig()
 	discovery.MaxPoolSize = 1
 	config := server.Config{
-		DatabasePath: databasePath,
-		CatalogDir:   filepath.Join("testdata", "catalog"),
-		Discovery:    &discovery,
+		DatabasePath:  databasePath,
+		SessionSecret: testSessionSecret,
+		CatalogDir:    filepath.Join("testdata", "catalog"),
+		Discovery:     &discovery,
 	}
 	app, err := server.NewWithDecisionRandomSeedForTest(config, 1)
 	if err != nil {

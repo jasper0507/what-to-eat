@@ -12,10 +12,51 @@ import (
 	"github.com/jasper0507/what-to-eat/internal/server"
 )
 
+var testSessionSecret = []byte("test-session-secret-must-be-at-least-32-bytes")
+
+func TestServerRejectsMissingSessionSecret(t *testing.T) {
+	app, err := server.New(server.Config{
+		DatabasePath: filepath.Join(t.TempDir(), "what-to-eat.db"),
+	})
+	if app != nil {
+		t.Cleanup(func() { app.Close() })
+	}
+	if err == nil || !strings.Contains(err.Error(), "SessionSecret") {
+		t.Fatalf("New error = %v, want missing SessionSecret error", err)
+	}
+}
+
+func TestServerRejectsMissingDatabasePath(t *testing.T) {
+	app, err := server.New(server.Config{SessionSecret: testSessionSecret})
+	if app != nil {
+		t.Cleanup(func() { app.Close() })
+	}
+	if err == nil || !strings.Contains(err.Error(), "DatabasePath") {
+		t.Fatalf("New error = %v, want missing DatabasePath error", err)
+	}
+}
+
+func TestServerReportsDatabaseOpenFailure(t *testing.T) {
+	databasePath := t.TempDir()
+	app, err := server.New(server.Config{
+		DatabasePath:  databasePath,
+		SessionSecret: testSessionSecret,
+	})
+	if app != nil {
+		t.Cleanup(func() { app.Close() })
+	}
+	if err == nil ||
+		!strings.Contains(err.Error(), "initialize SQLite database") ||
+		!strings.Contains(err.Error(), databasePath) {
+		t.Fatalf("New error = %v, want explicit SQLite path failure", err)
+	}
+}
+
 func newTestApp(t *testing.T, secureCookies bool) *server.App {
 	t.Helper()
 	app, err := server.New(server.Config{
 		DatabasePath:  filepath.Join(t.TempDir(), "what-to-eat.db"),
+		SessionSecret: testSessionSecret,
 		SecureCookies: secureCookies,
 	})
 	if err != nil {

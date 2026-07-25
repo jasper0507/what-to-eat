@@ -16,16 +16,19 @@ func main() {
 	if err := os.MkdirAll(filepath.Dir(databasePath), 0o750); err != nil {
 		log.Fatal(err)
 	}
+	production := os.Getenv("APP_ENV") == "production"
 
 	app, err := server.New(server.Config{
 		DatabasePath:  databasePath,
-		SecureCookies: os.Getenv("APP_ENV") == "production",
+		SessionSecret: []byte(os.Getenv("SESSION_SECRET")),
+		SecureCookies: production,
 		WebDir:        envOrDefault("WEB_DIR", "frontend/dist"),
 		CatalogDir:    os.Getenv("CATALOG_DIR"),
 		NIM: &server.NIMConfig{
-			APIKey:  os.Getenv("NVIDIA_API_KEY"),
-			BaseURL: os.Getenv("NIM_BASE_URL"),
-			Model:   os.Getenv("NIM_MODEL"),
+			APIKey:   os.Getenv("NVIDIA_API_KEY"),
+			BaseURL:  os.Getenv("NIM_BASE_URL"),
+			Model:    os.Getenv("NIM_MODEL"),
+			Required: production,
 		},
 	})
 	if err != nil {

@@ -1,5 +1,7 @@
 import { expect, test } from "@playwright/test";
 
+import { addCandidatePoolDish } from "./browser-api";
+
 test("Discovery stays explicit and respects similarity, Reroll penalty, and Meal limit", async ({
   page,
 }, testInfo) => {
@@ -11,10 +13,7 @@ test("Discovery stays explicit and respects similarity, Reroll penalty, and Meal
   await expect(page.getByRole("heading", { name: "先聊聊你爱吃什么" })).toBeVisible();
 
   const poolDish = "vegetable_dish/番茄炒蛋.md";
-  const addResponse = await page.request.post("/api/candidate-pool/dishes", {
-    data: { dish_id: poolDish, preference_weight: 5 },
-  });
-  expect(addResponse.ok()).toBe(true);
+  expect(await addCandidatePoolDish(page, poolDish, 5)).toBe(true);
 
   await page.goto("/");
   await page.getByRole("button", { name: "开始这一顿" }).click();

@@ -341,8 +341,9 @@ func TestLowTasteRatingIsAccountScopedIdempotentAndDurablyRejectsDish(t *testing
 func TestResumeRequiresEachOfMultiplePendingRatings(t *testing.T) {
 	databasePath := filepath.Join(t.TempDir(), "what-to-eat.db")
 	config := server.Config{
-		DatabasePath: databasePath,
-		CatalogDir:   filepath.Join("testdata", "catalog"),
+		DatabasePath:  databasePath,
+		SessionSecret: testSessionSecret,
+		CatalogDir:    filepath.Join("testdata", "catalog"),
 	}
 	app, err := server.New(config)
 	if err != nil {

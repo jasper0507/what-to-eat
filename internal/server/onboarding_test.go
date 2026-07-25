@@ -21,9 +21,10 @@ func openOnboardingApp(
 ) *server.App {
 	t.Helper()
 	app, err := server.NewWithScriptedNIMForTest(server.Config{
-		DatabasePath: databasePath,
-		CatalogDir:   filepath.Join("testdata", "catalog"),
-		Discovery:    &server.DiscoveryConfig{Enabled: false},
+		DatabasePath:  databasePath,
+		SessionSecret: testSessionSecret,
+		CatalogDir:    filepath.Join("testdata", "catalog"),
+		Discovery:     &server.DiscoveryConfig{Enabled: false},
 	}, steps)
 	if err != nil {
 		t.Fatal(err)
@@ -368,8 +369,9 @@ func TestNIMAPIKeyStaysAtTheServerBoundary(t *testing.T) {
 	defer nim.Close()
 
 	app, err := server.New(server.Config{
-		DatabasePath: filepath.Join(t.TempDir(), "what-to-eat.db"),
-		CatalogDir:   filepath.Join("testdata", "catalog"),
+		DatabasePath:  filepath.Join(t.TempDir(), "what-to-eat.db"),
+		SessionSecret: testSessionSecret,
+		CatalogDir:    filepath.Join("testdata", "catalog"),
 		NIM: &server.NIMConfig{
 			APIKey:  apiKey,
 			BaseURL: nim.URL + "/v1",
@@ -407,7 +409,8 @@ func TestNIMAPIKeyStaysAtTheServerBoundary(t *testing.T) {
 
 func TestNIMAPIKeyRejectsInsecureRemoteEndpoint(t *testing.T) {
 	app, err := server.New(server.Config{
-		DatabasePath: filepath.Join(t.TempDir(), "what-to-eat.db"),
+		DatabasePath:  filepath.Join(t.TempDir(), "what-to-eat.db"),
+		SessionSecret: testSessionSecret,
 		NIM: &server.NIMConfig{
 			APIKey:  "must-not-cross-plaintext-http",
 			BaseURL: "http://nim.example.com/v1",
@@ -419,6 +422,20 @@ func TestNIMAPIKeyRejectsInsecureRemoteEndpoint(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "must use HTTPS") {
 		t.Errorf("New error = %q, want HTTPS requirement", err)
+	}
+}
+
+func TestRequiredNIMRejectsMissingAPIKey(t *testing.T) {
+	app, err := server.New(server.Config{
+		DatabasePath:  filepath.Join(t.TempDir(), "what-to-eat.db"),
+		SessionSecret: testSessionSecret,
+		NIM:           &server.NIMConfig{Required: true},
+	})
+	if app != nil {
+		t.Cleanup(func() { app.Close() })
+	}
+	if err == nil || !strings.Contains(err.Error(), "NVIDIA API key is required") {
+		t.Fatalf("New error = %v, want missing NVIDIA API key error", err)
 	}
 }
 
@@ -441,7 +458,8 @@ func TestNIMAPIKeyIsNotForwardedThroughRedirect(t *testing.T) {
 	defer redirectSource.Close()
 
 	app, err := server.New(server.Config{
-		DatabasePath: filepath.Join(t.TempDir(), "what-to-eat.db"),
+		DatabasePath:  filepath.Join(t.TempDir(), "what-to-eat.db"),
+		SessionSecret: testSessionSecret,
 		NIM: &server.NIMConfig{
 			APIKey:  "must-not-follow-redirects",
 			BaseURL: redirectSource.URL,

@@ -1,5 +1,6 @@
 .git
 .env
+backups
 data
 frontend/dist
 frontend/node_modules
