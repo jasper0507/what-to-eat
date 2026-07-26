@@ -20,12 +20,10 @@ func openOnboardingApp(
 	steps []server.ScriptedNIMStep,
 ) *server.App {
 	t.Helper()
-	app, err := server.NewWithScriptedNIMForTest(server.Config{
-		DatabasePath:  databasePath,
-		SessionSecret: testSessionSecret,
-		CatalogDir:    filepath.Join("testdata", "catalog"),
-		Discovery:     &server.DiscoveryConfig{Enabled: false},
-	}, steps)
+	app, err := server.NewWithScriptedNIMForTest(
+		testConfig(t, databasePath, &server.DiscoveryConfig{Enabled: false}),
+		steps,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -368,17 +366,14 @@ func TestNIMAPIKeyStaysAtTheServerBoundary(t *testing.T) {
 	}))
 	defer nim.Close()
 
-	app, err := server.New(server.Config{
-		DatabasePath:  filepath.Join(t.TempDir(), "what-to-eat.db"),
-		SessionSecret: testSessionSecret,
-		CatalogDir:    filepath.Join("testdata", "catalog"),
-		NIM: &server.NIMConfig{
-			APIKey:  apiKey,
-			BaseURL: nim.URL + "/v1",
-			Model:   "test-model",
-			Timeout: time.Second,
-		},
-	})
+	config := testConfig(t, "", nil)
+	config.NIM = &server.NIMConfig{
+		APIKey:  apiKey,
+		BaseURL: nim.URL + "/v1",
+		Model:   "test-model",
+		Timeout: time.Second,
+	}
+	app, err := server.New(config)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -408,14 +403,12 @@ func TestNIMAPIKeyStaysAtTheServerBoundary(t *testing.T) {
 }
 
 func TestNIMAPIKeyRejectsInsecureRemoteEndpoint(t *testing.T) {
-	app, err := server.New(server.Config{
-		DatabasePath:  filepath.Join(t.TempDir(), "what-to-eat.db"),
-		SessionSecret: testSessionSecret,
-		NIM: &server.NIMConfig{
-			APIKey:  "must-not-cross-plaintext-http",
-			BaseURL: "http://nim.example.com/v1",
-		},
-	})
+	config := testConfig(t, "", nil)
+	config.NIM = &server.NIMConfig{
+		APIKey:  "must-not-cross-plaintext-http",
+		BaseURL: "http://nim.example.com/v1",
+	}
+	app, err := server.New(config)
 	if err == nil {
 		app.Close()
 		t.Fatal("New accepted a non-loopback HTTP NIM endpoint")
@@ -426,11 +419,9 @@ func TestNIMAPIKeyRejectsInsecureRemoteEndpoint(t *testing.T) {
 }
 
 func TestRequiredNIMRejectsMissingAPIKey(t *testing.T) {
-	app, err := server.New(server.Config{
-		DatabasePath:  filepath.Join(t.TempDir(), "what-to-eat.db"),
-		SessionSecret: testSessionSecret,
-		NIM:           &server.NIMConfig{Required: true},
-	})
+	config := testConfig(t, "", nil)
+	config.NIM = &server.NIMConfig{Required: true}
+	app, err := server.New(config)
 	if app != nil {
 		t.Cleanup(func() { app.Close() })
 	}
@@ -457,14 +448,12 @@ func TestNIMAPIKeyIsNotForwardedThroughRedirect(t *testing.T) {
 	}))
 	defer redirectSource.Close()
 
-	app, err := server.New(server.Config{
-		DatabasePath:  filepath.Join(t.TempDir(), "what-to-eat.db"),
-		SessionSecret: testSessionSecret,
-		NIM: &server.NIMConfig{
-			APIKey:  "must-not-follow-redirects",
-			BaseURL: redirectSource.URL,
-		},
-	})
+	config := testConfig(t, "", nil)
+	config.NIM = &server.NIMConfig{
+		APIKey:  "must-not-follow-redirects",
+		BaseURL: redirectSource.URL,
+	}
+	app, err := server.New(config)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -112,11 +112,7 @@ func TestSQLiteBackupRestoresEntireEaterJourneyState(t *testing.T) {
 
 func openPersistentApp(t *testing.T, databasePath string) *server.App {
 	t.Helper()
-	app, err := server.NewWithDecisionRandomSeedForTest(server.Config{
-		DatabasePath:  databasePath,
-		SessionSecret: testSessionSecret,
-		CatalogDir:    filepath.Join("testdata", "catalog"),
-	}, 1)
+	app, err := server.NewWithDecisionRandomSeedForTest(testConfig(t, databasePath, nil), 1)
 	if err != nil {
 		t.Fatal(err)
 	}

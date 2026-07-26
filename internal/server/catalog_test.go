@@ -12,6 +12,25 @@ import (
 	"github.com/jasper0507/what-to-eat/internal/server"
 )
 
+// testConfig 是测试共用的 Config 基座；databasePath 为空时使用临时目录，
+// discovery 为 nil 时使用生产默认值。
+func testConfig(
+	t *testing.T,
+	databasePath string,
+	discovery *server.DiscoveryConfig,
+) server.Config {
+	t.Helper()
+	if databasePath == "" {
+		databasePath = filepath.Join(t.TempDir(), "what-to-eat.db")
+	}
+	return server.Config{
+		DatabasePath:  databasePath,
+		SessionSecret: testSessionSecret,
+		CatalogDir:    filepath.Join("testdata", "catalog"),
+		Discovery:     discovery,
+	}
+}
+
 func openCatalogApp(t *testing.T, databasePath string) *server.App {
 	return openCatalogAppWithDecisionSeed(t, databasePath, nil)
 }
@@ -22,15 +41,7 @@ func openCatalogAppWithDecisionSeed(
 	seed *int64,
 ) *server.App {
 	t.Helper()
-	if databasePath == "" {
-		databasePath = filepath.Join(t.TempDir(), "what-to-eat.db")
-	}
-	config := server.Config{
-		DatabasePath:  databasePath,
-		SessionSecret: testSessionSecret,
-		CatalogDir:    filepath.Join("testdata", "catalog"),
-		Discovery:     &server.DiscoveryConfig{Enabled: false},
-	}
+	config := testConfig(t, databasePath, &server.DiscoveryConfig{Enabled: false})
 	var app *server.App
 	var err error
 	if seed == nil {
@@ -226,13 +237,7 @@ func TestAppUpgradesPoolOnlyDecisionSchemaForDiscovery(t *testing.T) {
 
 	discovery := server.DefaultDiscoveryConfig()
 	discovery.MaxPoolSize = 1
-	config := server.Config{
-		DatabasePath:  databasePath,
-		SessionSecret: testSessionSecret,
-		CatalogDir:    filepath.Join("testdata", "catalog"),
-		Discovery:     &discovery,
-	}
-	app, err := server.NewWithDecisionRandomSeedForTest(config, 1)
+	app, err := server.NewWithDecisionRandomSeedForTest(testConfig(t, databasePath, &discovery), 1)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -12,32 +12,26 @@ import (
 )
 
 func main() {
-	databasePath := envOrDefault("DATABASE_PATH", "data/what-to-eat.db")
-	if err := os.MkdirAll(filepath.Dir(databasePath), 0o750); err != nil {
+	config, err := server.ConfigFromEnv()
+	if err != nil {
 		log.Fatal(err)
 	}
-	production := os.Getenv("APP_ENV") == "production"
+	if err := os.MkdirAll(filepath.Dir(config.DatabasePath), 0o750); err != nil {
+		log.Fatal(err)
+	}
 
-	app, err := server.New(server.Config{
-		DatabasePath:  databasePath,
-		SessionSecret: []byte(os.Getenv("SESSION_SECRET")),
-		SecureCookies: production,
-		WebDir:        envOrDefault("WEB_DIR", "frontend/dist"),
-		CatalogDir:    os.Getenv("CATALOG_DIR"),
-		NIM: &server.NIMConfig{
-			APIKey:   os.Getenv("NVIDIA_API_KEY"),
-			BaseURL:  os.Getenv("NIM_BASE_URL"),
-			Model:    os.Getenv("NIM_MODEL"),
-			Required: production,
-		},
-	})
+	app, err := server.New(config)
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer app.Close()
 
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
 	httpServer := &http.Server{
-		Addr:              ":" + envOrDefault("PORT", "8080"),
+		Addr:              ":" + port,
 		Handler:           app,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
@@ -49,11 +43,4 @@ func main() {
 	if err := httpServer.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal(err)
 	}
-}
-
-func envOrDefault(name, fallback string) string {
-	if value := os.Getenv(name); value != "" {
-		return value
-	}
-	return fallback
 }

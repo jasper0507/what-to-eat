@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
-	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
@@ -189,13 +188,7 @@ func openCatalogAppWithDiscovery(
 	seed int64,
 ) *server.App {
 	t.Helper()
-	config := server.Config{
-		DatabasePath:  filepath.Join(t.TempDir(), "what-to-eat.db"),
-		SessionSecret: testSessionSecret,
-		CatalogDir:    filepath.Join("testdata", "catalog"),
-		Discovery:     &discovery,
-	}
-	app, err := server.NewWithDecisionRandomSeedForTest(config, seed)
+	app, err := server.NewWithDecisionRandomSeedForTest(testConfig(t, "", &discovery), seed)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -7,7 +7,9 @@ import (
 	"log"
 	mathrand "math/rand"
 	"net/http"
+	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -23,6 +25,69 @@ type Config struct {
 	CatalogDir    string
 	Discovery     *DiscoveryConfig
 	NIM           *NIMConfig
+}
+
+// ConfigFromEnv 从环境变量组装 Config，未设置的项使用默认值。
+// APP_ENV=production 同时启用 SecureCookies 与 NIM.Required。
+// Discovery 阈值经 DISCOVERY_* 覆盖，NIM 超时经 NIM_TIMEOUT（如 "15s"）。
+func ConfigFromEnv() (Config, error) {
+	production := os.Getenv("APP_ENV") == "production"
+
+	discovery := DefaultDiscoveryConfig()
+	nim := NIMConfig{
+		APIKey:   os.Getenv("NVIDIA_API_KEY"),
+		BaseURL:  os.Getenv("NIM_BASE_URL"),
+		Model:    os.Getenv("NIM_MODEL"),
+		Required: production,
+	}
+	for name, apply := range map[string]func(string) error{
+		"DISCOVERY_ENABLED": func(value string) (err error) {
+			discovery.Enabled, err = strconv.ParseBool(value)
+			return err
+		},
+		"DISCOVERY_MAX_POOL_SIZE":            envInt(&discovery.MaxPoolSize),
+		"DISCOVERY_MAX_ELIGIBLE_DISHES":      envInt(&discovery.MaxEligibleDishes),
+		"DISCOVERY_MIN_REROLLS":              envInt(&discovery.MinRerolls),
+		"DISCOVERY_REQUIRED_SIGNALS":         envInt(&discovery.RequiredSignals),
+		"DISCOVERY_RECENT_MEAL_WINDOW":       envInt(&discovery.RecentMealWindow),
+		"DISCOVERY_MAX_DISCOVERIES_PER_MEAL": envInt(&discovery.MaxDiscoveriesPerMeal),
+		"NIM_TIMEOUT": func(value string) (err error) {
+			nim.Timeout, err = time.ParseDuration(value)
+			return err
+		},
+	} {
+		value := os.Getenv(name)
+		if value == "" {
+			continue
+		}
+		if err := apply(value); err != nil {
+			return Config{}, fmt.Errorf("parse %s: %w", name, err)
+		}
+	}
+
+	return Config{
+		DatabasePath:  envOrDefault("DATABASE_PATH", "data/what-to-eat.db"),
+		SessionSecret: []byte(os.Getenv("SESSION_SECRET")),
+		SecureCookies: production,
+		WebDir:        envOrDefault("WEB_DIR", "frontend/dist"),
+		CatalogDir:    os.Getenv("CATALOG_DIR"),
+		Discovery:     &discovery,
+		NIM:           &nim,
+	}, nil
+}
+
+func envInt(target *int) func(string) error {
+	return func(value string) (err error) {
+		*target, err = strconv.Atoi(value)
+		return err
+	}
+}
+
+func envOrDefault(name, fallback string) string {
+	if value := os.Getenv(name); value != "" {
+		return value
+	}
+	return fallback
 }
 
 type App struct {
@@ -72,96 +137,9 @@ func newApp(
 	}
 	db.SetMaxOpenConns(1)
 
-	if _, err := db.Exec(`
-		PRAGMA foreign_keys = ON;
-		CREATE TABLE IF NOT EXISTS accounts (
-			id INTEGER PRIMARY KEY,
-			username TEXT NOT NULL,
-			username_key TEXT NOT NULL UNIQUE,
-			password_hash TEXT NOT NULL
-		);
-		CREATE TABLE IF NOT EXISTS sessions (
-			token_hash BLOB PRIMARY KEY,
-			account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
-			expires_at INTEGER NOT NULL
-		);
-		CREATE TABLE IF NOT EXISTS catalog_dishes (
-			source_path TEXT PRIMARY KEY,
-			name TEXT NOT NULL,
-			recipe TEXT NOT NULL
-		);
-		CREATE TABLE IF NOT EXISTS candidate_pool (
-			account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
-			dish_id TEXT NOT NULL REFERENCES catalog_dishes(source_path) ON DELETE CASCADE,
-			preference_weight REAL NOT NULL CHECK (
-				preference_weight >= 0.1 AND preference_weight <= 5
-			),
-			PRIMARY KEY (account_id, dish_id)
-		);
-		CREATE TABLE IF NOT EXISTS onboarding_interviews (
-			account_id INTEGER PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
-			status TEXT NOT NULL CHECK (
-				status IN ('in_progress', 'failed', 'completed', 'manual')
-			),
-			attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
-			updated_at INTEGER NOT NULL
-		);
-		CREATE TABLE IF NOT EXISTS onboarding_messages (
-			id INTEGER PRIMARY KEY,
-			account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
-			role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
-			content TEXT NOT NULL,
-			created_at INTEGER NOT NULL
-		);
-		CREATE INDEX IF NOT EXISTS onboarding_messages_by_account
-			ON onboarding_messages(account_id, id);
-		CREATE TABLE IF NOT EXISTS meals (
-			id INTEGER PRIMARY KEY,
-			account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
-			status TEXT NOT NULL CHECK (status IN ('active', 'accepted')),
-			created_at INTEGER NOT NULL
-		);
-		CREATE UNIQUE INDEX IF NOT EXISTS one_active_meal_per_account
-			ON meals(account_id) WHERE status = 'active';
-		CREATE TABLE IF NOT EXISTS decisions (
-			id INTEGER PRIMARY KEY,
-			meal_id INTEGER NOT NULL REFERENCES meals(id) ON DELETE CASCADE,
-			dish_id TEXT NOT NULL REFERENCES catalog_dishes(source_path),
-			mode TEXT NOT NULL CHECK (mode IN ('pool', 'discovery')),
-			reason TEXT NOT NULL DEFAULT '',
-			status TEXT NOT NULL CHECK (status IN ('active', 'accepted')),
-			rerolled_to_id INTEGER REFERENCES decisions(id),
-			created_at INTEGER NOT NULL
-		);
-		CREATE TABLE IF NOT EXISTS eating_records (
-			id INTEGER PRIMARY KEY,
-			account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
-			sequence INTEGER NOT NULL CHECK (sequence > 0),
-			meal_id INTEGER NOT NULL UNIQUE REFERENCES meals(id) ON DELETE CASCADE,
-			decision_id INTEGER NOT NULL UNIQUE REFERENCES decisions(id),
-			dish_id TEXT NOT NULL REFERENCES catalog_dishes(source_path),
-			accepted_at INTEGER NOT NULL,
-			UNIQUE (account_id, sequence)
-		);
-	`); err != nil {
+	if err := migrateSchema(db); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("initialize SQLite database %q: %w", config.DatabasePath, err)
-	}
-	if err := migrateLegacyCatalogSchema(db); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("migrate Catalog: %w", err)
-	}
-	if err := migrateRerollSchema(db); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("migrate Reroll: %w", err)
-	}
-	if err := migrateDiscoverySchema(db); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("migrate Discovery: %w", err)
-	}
-	if err := migratePendingRatingSchema(db); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("migrate Pending rating: %w", err)
 	}
 	if config.CatalogDir != "" {
 		if err := importCatalog(db, config.CatalogDir); err != nil {

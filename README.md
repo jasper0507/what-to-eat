@@ -63,6 +63,8 @@ Discovery pressure 的三个透明信号分别是 Candidate pool 不超过 3 道
 
 嵌入应用时可从 `server.DefaultDiscoveryConfig()` 取得默认值，通过 `server.Config.Discovery` 调整阈值或关闭 Discovery。
 
+部署时同一组阈值可经环境变量覆盖，无需重编译：`DISCOVERY_ENABLED`、`DISCOVERY_MAX_POOL_SIZE`、`DISCOVERY_MAX_ELIGIBLE_DISHES`、`DISCOVERY_MIN_REROLLS`、`DISCOVERY_REQUIRED_SIGNALS`、`DISCOVERY_RECENT_MEAL_WINDOW`、`DISCOVERY_MAX_DISCOVERIES_PER_MEAL`；NIM 请求超时经 `NIM_TIMEOUT`（如 `15s`）。
+
 ## 单节点运行
 
 ```bash

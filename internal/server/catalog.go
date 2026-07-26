@@ -81,39 +81,6 @@ func (a *App) getRecipe(context *gin.Context) {
 	})
 }
 
-func migrateLegacyCatalogSchema(db *sql.DB) error {
-	var legacyColumns int
-	if err := db.QueryRow(`
-		SELECT count(*)
-		FROM pragma_table_info('catalog_dishes')
-		WHERE name IN ('id', 'category', 'tags')
-	`).Scan(&legacyColumns); err != nil {
-		return err
-	}
-	if legacyColumns == 0 {
-		return nil
-	}
-
-	transaction, err := db.Begin()
-	if err != nil {
-		return err
-	}
-	defer transaction.Rollback()
-	if _, err := transaction.Exec(`
-		CREATE TABLE catalog_dishes_next (
-			source_path TEXT PRIMARY KEY,
-			name TEXT NOT NULL,
-			recipe TEXT NOT NULL
-		);
-		INSERT INTO catalog_dishes_next (source_path, name, recipe)
-			SELECT source_path, name, recipe FROM catalog_dishes;
-		DROP TABLE catalog_dishes;
-		ALTER TABLE catalog_dishes_next RENAME TO catalog_dishes;
-	`); err != nil {
-		return err
-	}
-	return transaction.Commit()
-}
 
 func importCatalog(db *sql.DB, root string) error {
 	transaction, err := db.Begin()
