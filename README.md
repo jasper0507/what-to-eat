@@ -20,6 +20,21 @@ npm run dev
 
 打开 `http://localhost:5173`。用户名须为 3–32 个字母、数字、下划线或连字符（支持中文），密码须至少 8 个字符且不超过 72 个 UTF-8 字节。
 
+### 前端质量门
+
+```bash
+cd frontend
+npm run typecheck     # tsc 项目引用：src、tests、配置一起检查
+npm run lint          # ESLint（类型感知 + react-hooks + @tanstack/query）
+npm run format:check  # Prettier（tests/ 不参与格式化，保持验收规格逐字节稳定）
+npm run test          # Vitest 纯逻辑单测（API client、校验、格式化）
+npm run test:browser  # Playwright 全栈验收（自动构建并启动真实 Go testserver）
+```
+
+若本机 shell 设置了 HTTP 代理（如 `http_proxy=http://127.0.0.1:7897`），Playwright 的
+健康检查可能不识别 `127.*` 通配写法而走代理导致 502。此时用
+`NO_PROXY="127.0.0.1,localhost" npm run test:browser` 运行。
+
 ## NVIDIA NIM Onboarding
 
 Onboarding interview 只由 Go 服务调用 NVIDIA NIM；API key 不会进入前端构建。启动 API 前设置：

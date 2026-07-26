@@ -1,0 +1,4 @@
+dist
+tests
+playwright.config.ts
+package-lock.json
