@@ -153,6 +153,46 @@ func TestRegistrationCreatesSecureRestorableSession(t *testing.T) {
 	}
 }
 
+func TestLogoutRevokesSessionIdempotently(t *testing.T) {
+	app := newTestApp(t, false)
+	registerResponse := doRequest(
+		t,
+		app,
+		http.MethodPost,
+		"/api/auth/register",
+		`{"username":"要走的人","password":"correct horse battery staple"}`,
+	)
+	if registerResponse.Code != http.StatusCreated {
+		t.Fatalf("register status = %d, want %d", registerResponse.Code, http.StatusCreated)
+	}
+	sessionCookie := registerResponse.Result().Cookies()[0]
+
+	logoutResponse := doRequest(t, app, http.MethodPost, "/api/auth/logout", "", sessionCookie)
+	if logoutResponse.Code != http.StatusNoContent {
+		t.Fatalf("logout status = %d, want %d", logoutResponse.Code, http.StatusNoContent)
+	}
+	cleared := logoutResponse.Result().Cookies()
+	if len(cleared) != 1 || cleared[0].Value != "" || cleared[0].MaxAge >= 0 {
+		t.Errorf("logout should clear the session cookie, got %#v", cleared)
+	}
+
+	// 会话已在服务端注销：旧 cookie 不再可用
+	sessionResponse := doRequest(t, app, http.MethodGet, "/api/auth/session", "", sessionCookie)
+	if sessionResponse.Code != http.StatusUnauthorized {
+		t.Errorf("session after logout status = %d, want %d", sessionResponse.Code, http.StatusUnauthorized)
+	}
+
+	// 幂等：重复登出、无 cookie 登出都成功
+	again := doRequest(t, app, http.MethodPost, "/api/auth/logout", "", sessionCookie)
+	if again.Code != http.StatusNoContent {
+		t.Errorf("repeat logout status = %d, want %d", again.Code, http.StatusNoContent)
+	}
+	bare := doRequest(t, app, http.MethodPost, "/api/auth/logout", "")
+	if bare.Code != http.StatusNoContent {
+		t.Errorf("cookieless logout status = %d, want %d", bare.Code, http.StatusNoContent)
+	}
+}
+
 func TestEaterCanLogin(t *testing.T) {
 	app := newTestApp(t, false)
 	registerResponse := doRequest(

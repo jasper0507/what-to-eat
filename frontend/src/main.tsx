@@ -1,5 +1,5 @@
 import { QueryClientProvider } from "@tanstack/react-query";
-import { App as AntApp, ConfigProvider } from "antd";
+import { ConfigProvider } from "antd";
 import zhCN from "antd/locale/zh_CN";
 import { LazyMotion, MotionConfig } from "motion/react";
 import React from "react";
@@ -23,21 +23,21 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
       theme={appTheme}
       button={{ autoInsertSpace: false }}
     >
-      <AntApp>
-        <QueryClientProvider client={queryClient}>
-          {/* strict：只允许 m.* 组件；特性包异步加载，不阻塞首屏 */}
-          <LazyMotion
-            features={() =>
-              import("@/lib/motionFeatures").then((mod) => mod.default)
-            }
-            strict
-          >
-            <MotionConfig reducedMotion="user">
-              <RouterProvider router={router} />
-            </MotionConfig>
-          </LazyMotion>
-        </QueryClientProvider>
-      </AntApp>
+      {/* antd 的 <App> 已摘除：它会给 .ant-app 内所有 a 上 colorLink，
+          污染新世界链接色；message 弹层新旅程也不再用。 */}
+      <QueryClientProvider client={queryClient}>
+        {/* strict：只允许 m.* 组件；特性包异步加载，不阻塞首屏 */}
+        <LazyMotion
+          features={() =>
+            import("@/lib/motionFeatures").then((mod) => mod.default)
+          }
+          strict
+        >
+          <MotionConfig reducedMotion="user">
+            <RouterProvider router={router} />
+          </MotionConfig>
+        </LazyMotion>
+      </QueryClientProvider>
     </ConfigProvider>
   </React.StrictMode>,
 );

@@ -4,6 +4,7 @@ import type {
   Account,
   Credentials,
   Dish,
+  EatingRecordEntry,
   MealState,
   OnboardingState,
   PoolDish,
@@ -11,6 +12,11 @@ import type {
   RecipeResponse,
   TasteRatingResponse,
 } from "./types";
+
+/** 场合因子的客户端上报（ADR-0022）：揭示按本机小时理解「这一顿」。 */
+function localHour(): number {
+  return new Date().getHours();
+}
 
 export function register(
   credentials: Credentials,
@@ -20,6 +26,11 @@ export function register(
 
 export function login(credentials: Credentials): Promise<{ account: Account }> {
   return apiFetch("POST", "/api/auth/login", { body: credentials });
+}
+
+/** 幂等：没 cookie、token 已失效都 204。 */
+export function logout(): Promise<void> {
+  return apiFetch("POST", "/api/auth/logout");
 }
 
 /** 匿名（unauthorized）返回 null——首屏未登录不是错误；其余错误照抛。 */
@@ -124,17 +135,54 @@ export function resumeMeal(signal?: AbortSignal): Promise<MealState> {
 
 /** 已有 active Decision 时后端幂等返回 200 + 同一状态。 */
 export function beginMeal(): Promise<MealState> {
-  return apiFetch("POST", "/api/meals");
+  return apiFetch("POST", "/api/meals", { body: { local_hour: localHour() } });
 }
 
 export function rerollDecision(decisionId: number): Promise<MealState> {
-  return apiFetch("POST", `/api/decisions/${decisionId}/reroll`);
+  return apiFetch("POST", `/api/decisions/${decisionId}/reroll`, {
+    body: { local_hour: localHour() },
+  });
 }
 
 export function acceptDecision(
   decisionId: number,
 ): Promise<AcceptanceResponse> {
   return apiFetch("POST", `/api/decisions/${decisionId}/accept`);
+}
+
+/** 三出口·放弃本顿：Meal → abandoned，无吃饭记录，不进冷却。 */
+export function abandonMeal(): Promise<MealState> {
+  return apiFetch("POST", "/api/meals/abandon");
+}
+
+/** 三出口·亲自点一道：仅 Reroll budget 耗尽时解锁（否则 hand_pick_locked）。 */
+export function handPickDish(dishId: string): Promise<AcceptanceResponse> {
+  return apiFetch("POST", "/api/meals/hand-pick", {
+    body: { dish_id: dishId, local_hour: localHour() },
+  });
+}
+
+/** 轻历史：最近吃过、评过几档、现在池里几档。 */
+export async function listEatingRecords(
+  limit: number,
+  signal?: AbortSignal,
+): Promise<EatingRecordEntry[]> {
+  const response = await apiFetch<{ records: EatingRecordEntry[] }>(
+    "GET",
+    `/api/eating-records?limit=${limit}`,
+    { signal },
+  );
+  return response.records;
+}
+
+/** 轻历史的补评分：可选、绝不拦路。 */
+export function rateEatingRecord(
+  recordId: number,
+  rating: Rating,
+): Promise<TasteRatingResponse> {
+  return apiFetch("POST", `/api/eating-records/${recordId}/rate`, {
+    body: { rating },
+  });
 }
 
 export function ratePending(

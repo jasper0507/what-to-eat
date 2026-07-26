@@ -146,3 +146,48 @@ input:-webkit-autofill:focus {
     animation: none;
   }
 }
+
+/* 揭示序列（brief §三）：一拍期待——陶问号一闪即隐，菜名落定，理由行跟上。
+   全程 ≤0.75s；靠 key=decision.id 重挂载重放，连续 Reroll 随时打断。 */
+@keyframes reveal-tease {
+  0% {
+    opacity: 0;
+    transform: scale(0.92);
+  }
+  30% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  70% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.04);
+  }
+}
+
+@utility animate-tease {
+  animation: reveal-tease 0.34s ease-out both;
+
+  @media (prefers-reduced-motion: reduce) {
+    animation: none;
+    opacity: 0;
+  }
+}
+
+@utility animate-reveal-name {
+  animation: rise-in 0.32s cubic-bezier(0.2, 0, 0, 1) 0.28s both;
+
+  @media (prefers-reduced-motion: reduce) {
+    animation: none;
+  }
+}
+
+@utility animate-reveal-reason {
+  animation: rise-in 0.3s cubic-bezier(0.2, 0, 0, 1) 0.44s both;
+
+  @media (prefers-reduced-motion: reduce) {
+    animation: none;
+  }
+}

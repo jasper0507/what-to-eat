@@ -94,6 +94,19 @@ func (a *App) session(context *gin.Context) {
 	context.JSON(http.StatusOK, gin.H{"account": sessionAccount(context)})
 }
 
+// logout 幂等注销：没 cookie、token 已失效都返回 204——登出的目的只是
+// 「这台设备不再持有会话」，不需要先证明会话有效。
+func (a *App) logout(context *gin.Context) {
+	if cookie, err := context.Cookie(sessionCookieName); err == nil {
+		if err := a.sessions.Revoke(context, cookie); err != nil {
+			writeInternalError(context, "revoke Account session", err)
+			return
+		}
+	}
+	a.clearSessionCookie(context)
+	context.Status(http.StatusNoContent)
+}
+
 func (a *App) setSessionCookie(context *gin.Context, token string, expiresAt time.Time) {
 	http.SetCookie(context.Writer, &http.Cookie{
 		Name:     sessionCookieName,
@@ -101,6 +114,18 @@ func (a *App) setSessionCookie(context *gin.Context, token string, expiresAt tim
 		Path:     "/",
 		Expires:  expiresAt,
 		MaxAge:   int(time.Until(expiresAt).Seconds()),
+		HttpOnly: true,
+		Secure:   a.secureCookies,
+		SameSite: http.SameSiteLaxMode,
+	})
+}
+
+func (a *App) clearSessionCookie(context *gin.Context) {
+	http.SetCookie(context.Writer, &http.Cookie{
+		Name:     sessionCookieName,
+		Value:    "",
+		Path:     "/",
+		MaxAge:   -1,
 		HttpOnly: true,
 		Secure:   a.secureCookies,
 		SameSite: http.SameSiteLaxMode,

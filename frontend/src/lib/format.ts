@@ -8,11 +8,6 @@ const mealAtFormatter = new Intl.DateTimeFormat("zh-CN", {
   hour12: false,
 });
 
-/** 规格锁定格式：一位小数（如 Preference weight：1.3 / 5.0）。 */
-export function formatWeight(weight: number): string {
-  return weight.toFixed(1);
-}
-
 export function formatMealAt(unixSeconds: number): string {
   return mealAtFormatter.format(new Date(unixSeconds * 1000));
 }

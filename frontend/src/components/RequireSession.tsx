@@ -1,13 +1,10 @@
-import { Spin } from "antd";
 import { LoaderCircle } from "lucide-react";
 import { Navigate, Outlet } from "react-router-dom";
 
 import { useSession } from "@/api/hooks";
-import { copy } from "@/lib/copy";
+import { Notice } from "@/components/Notice";
 
-import { ErrorAlert } from "./ErrorAlert";
-
-// 会话布局路由：加载 → 全应用唯一的 Spin；匿名/过期 → 声明式跳 /login。
+// 会话布局路由：加载 → 全应用唯一的全屏等待；匿名/过期 → 声明式跳 /login。
 // 全局 401 漏斗把 session 缓存置 null 后，也是由这里完成跳转。
 export default function RequireSession() {
   const session = useSession();
@@ -15,24 +12,23 @@ export default function RequireSession() {
   if (session.isPending) {
     return (
       <main
-        className="centered-state"
-        aria-label={copy.common.sessionLoadingLabel}
+        role="status"
+        aria-label="正在恢复登录状态"
+        className="flex min-h-dvh items-center justify-center bg-background"
       >
-        <Spin
-          indicator={
-            <LoaderCircle className="w2e-spin" size={40} strokeWidth={1.8} />
-          }
+        <LoaderCircle
+          aria-hidden="true"
+          className="size-5 animate-spin text-muted-foreground"
         />
       </main>
     );
   }
   if (session.isError) {
     return (
-      <main className="centered-state">
-        <ErrorAlert
-          error={session.error}
-          onRetry={() => void session.refetch()}
-        />
+      <main className="flex min-h-dvh items-center justify-center bg-background px-6 font-sans text-base text-foreground antialiased">
+        <Notice tone="error" onRetry={() => void session.refetch()}>
+          {session.error.message}
+        </Notice>
       </main>
     );
   }

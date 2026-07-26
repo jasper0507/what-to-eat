@@ -1,16 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { formatMealAt, formatWeight, mealAtISO } from "./format";
-
-describe("formatWeight", () => {
-  it("恒为一位小数（规格锁定的 Preference weight：X.X 格式）", () => {
-    expect(formatWeight(5)).toBe("5.0");
-    expect(formatWeight(1)).toBe("1.0");
-    expect(formatWeight(1.3)).toBe("1.3");
-    expect(formatWeight(0.7)).toBe("0.7");
-    expect(formatWeight(4.5)).toBe("4.5");
-  });
-});
+import { formatMealAt, mealAtISO } from "./format";
 
 describe("formatMealAt", () => {
   it("unix 秒渲染为 zh-CN 年月日时分", () => {

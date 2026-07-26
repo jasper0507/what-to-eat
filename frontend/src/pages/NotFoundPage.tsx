@@ -1,26 +1,26 @@
-import { Button } from "antd";
-import { CookingPot } from "lucide-react";
-import { m } from "motion/react";
+import { Link } from "react-router-dom";
 
-import { copy } from "@/lib/copy";
-import { pageEnter } from "@/lib/motion";
+import { buttonVariants } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 
 export default function NotFoundPage() {
   return (
-    <m.div {...pageEnter} className="container page-stack notfound">
-      <CookingPot
-        size={56}
-        strokeWidth={1.5}
-        className="notfound-icon"
+    <div className="animate-rise flex flex-col items-center gap-6 py-16 text-center">
+      <span
         aria-hidden="true"
-      />
-      <h1 className="page-title">{copy.notFound.title}</h1>
-      <p className="page-intro">{copy.notFound.intro}</p>
-      <div>
-        <Button type="primary" size="large" href="/">
-          {copy.notFound.home}
-        </Button>
+        className="font-serif text-6xl leading-none text-brand"
+      >
+        ？
+      </span>
+      <div className="space-y-1.5">
+        <h1 className="font-serif text-2xl font-medium">这里什么都没有。</h1>
+        <p className="text-sm text-muted-foreground">
+          地址不对。回主页，接着定这一顿。
+        </p>
       </div>
-    </m.div>
+      <Link to="/" className={cn(buttonVariants({ size: "lg" }))}>
+        回主页
+      </Link>
+    </div>
   );
 }

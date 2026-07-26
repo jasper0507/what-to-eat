@@ -52,8 +52,8 @@ export default function LoginPage() {
     );
   }
   if (session.data) {
-    // 注册成功直达 Onboarding；登录成功回主页（主页门控仍会按服务端状态兜底）
-    return <Navigate to={mode === "register" ? "/onboarding" : "/"} replace />;
+    // 注册与登录一律回主页：空池态即欢迎引导（brief §三，无弹窗无强制访谈）
+    return <Navigate to="/" replace />;
   }
 
   const t = text[mode];

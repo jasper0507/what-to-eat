@@ -372,7 +372,7 @@ func TestCandidatePoolRejectsInvalidOrUnavailableDish(t *testing.T) {
 	}
 	assertUnavailable(`{"dish_id":"vegetable_dish/番茄炒蛋.md","tier":4}`)
 
-	// 过渡垫片：v2 旧前端的 preference_weight 仍按档位映射折算（第 2 段移除）
+	// preference_weight 垫片已随段 2 前端铺开退役：旧字段不再被折算
 	legacy := candidatePoolRequest(
 		t,
 		app,
@@ -381,7 +381,7 @@ func TestCandidatePoolRejectsInvalidOrUnavailableDish(t *testing.T) {
 		`{"dish_id":"meat_dish/番茄牛腩.md","preference_weight":1.4}`,
 		sessionCookie,
 	)
-	if legacy.Code != http.StatusCreated {
-		t.Fatalf("legacy add status = %d, want %d; body = %s", legacy.Code, http.StatusCreated, legacy.Body)
+	if legacy.Code != http.StatusBadRequest {
+		t.Fatalf("legacy add status = %d, want %d; body = %s", legacy.Code, http.StatusBadRequest, legacy.Body)
 	}
 }

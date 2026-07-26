@@ -1,7 +1,5 @@
-import { App as AntApp, Button, Empty, Input, List } from "antd";
-import { m } from "motion/react";
-import { useState } from "react";
-import { Link } from "react-router-dom";
+import { LoaderCircle, Search, X } from "lucide-react";
+import { useState, type FormEvent } from "react";
 
 import {
   useAddPoolDish,
@@ -11,165 +9,257 @@ import {
   useUpdatePoolWeight,
 } from "@/api/hooks";
 import type { Dish, PoolDish } from "@/api/types";
-import { DishLine } from "@/components/DishLine";
-import { ErrorAlert } from "@/components/ErrorAlert";
-import { LoadingBlock } from "@/components/LoadingBlock";
-import { PageHeader } from "@/components/PageHeader";
-import { WeightControl } from "@/components/WeightControl";
-import { copy } from "@/lib/copy";
-import { pageEnter, springSnappy } from "@/lib/motion";
+import { Notice } from "@/components/Notice";
+import { TierBadge, TierScale } from "@/components/TierBadge";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { DEFAULT_POOL_TIER, POOL_TIERS, TIER_LABELS } from "@/lib/tiers";
 
-// 手工入池默认顶尖（4）；入池场景只开上三档（ADR-0022）
-const DEFAULT_ADD_TIER = 4 as const;
-
-const rowEnter = (index: number) => ({
-  initial: { opacity: 0, y: 12 },
-  animate: { opacity: 1, y: 0 },
-  transition: { ...springSnappy, delay: Math.min(index * 0.04, 0.3) },
-});
-
+// 池子页：这里的菜才会被揭示选中。档位只说人话（情感刻度徽标，点开切换，
+// 只见上三档）；数字权重是被处决的旧世界。
 export default function CandidatePoolPage() {
-  const { message } = AntApp.useApp();
   const pool = useCandidatePool();
+
+  return (
+    <div className="animate-rise space-y-10">
+      <section className="space-y-4">
+        <header className="space-y-1">
+          <h1 className="font-serif text-2xl font-medium">池子</h1>
+          <p className="text-sm text-muted-foreground">
+            {pool.data && pool.data.length > 0
+              ? `${pool.data.length} 道菜备着。点档位徽标可以改喜欢的程度。`
+              : "这一顿只会从池子里挑。"}
+          </p>
+        </header>
+
+        {pool.isPending ? (
+          <div
+            role="status"
+            aria-label="正在翻池子"
+            className="flex justify-center py-10"
+          >
+            <LoaderCircle
+              aria-hidden="true"
+              className="size-5 animate-spin text-muted-foreground"
+            />
+          </div>
+        ) : null}
+        {pool.isError ? (
+          <Notice tone="error" onRetry={() => void pool.refetch()}>
+            {pool.error.message}
+          </Notice>
+        ) : null}
+        {pool.data && pool.data.length === 0 ? (
+          <div className="rounded-md border border-border px-4 py-6 text-center text-sm text-muted-foreground">
+            池子还空着<span className="text-brand">？</span>
+            在下面搜你爱吃的，一道道放进来。
+          </div>
+        ) : null}
+        {pool.data && pool.data.length > 0 ? (
+          <ul className="divide-y divide-border rounded-md border border-border">
+            {pool.data.map((dish) => (
+              <PoolRow key={dish.id} dish={dish} />
+            ))}
+          </ul>
+        ) : null}
+      </section>
+
+      <AddSection poolIds={new Set((pool.data ?? []).map((dish) => dish.id))} />
+    </div>
+  );
+}
+
+function PoolRow({ dish }: { dish: PoolDish }) {
+  const [editing, setEditing] = useState(false);
   const updateWeight = useUpdatePoolWeight();
   const removeDish = useRemovePoolDish();
-  const addDish = useAddPoolDish();
+  const busy = updateWeight.isPending || removeDish.isPending;
 
+  return (
+    <li className="px-4 py-3">
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <p className="truncate">{dish.name}</p>
+          <p className="text-sm text-muted-foreground">{dish.category}</p>
+        </div>
+        <div className="flex shrink-0 items-center gap-1.5">
+          <button
+            type="button"
+            aria-expanded={editing}
+            aria-label={`改 ${dish.name} 的档位`}
+            disabled={busy}
+            onClick={() => setEditing((open) => !open)}
+            className="cursor-pointer rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:opacity-50"
+          >
+            <TierBadge tier={dish.tier} />
+          </button>
+          <button
+            type="button"
+            aria-label={`把 ${dish.name} 移出池子`}
+            disabled={busy}
+            onClick={() => removeDish.mutate(dish.id)}
+            className="flex size-8 cursor-pointer items-center justify-center rounded-md text-muted-foreground outline-none transition-colors duration-150 hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
+          >
+            {removeDish.isPending ? (
+              <LoaderCircle
+                aria-hidden="true"
+                className="size-4 animate-spin"
+              />
+            ) : (
+              <X aria-hidden="true" className="size-4" />
+            )}
+          </button>
+        </div>
+      </div>
+      {editing ? (
+        <div className="mt-2.5 flex items-center gap-3">
+          <TierScale
+            tiers={POOL_TIERS}
+            value={dish.tier}
+            size="sm"
+            disabled={busy}
+            onSelect={(tier) => {
+              if (tier === dish.tier) {
+                setEditing(false);
+                return;
+              }
+              updateWeight.mutate(
+                { dish_id: dish.id, tier },
+                { onSuccess: () => setEditing(false) },
+              );
+            }}
+          />
+          {updateWeight.isPending ? (
+            <LoaderCircle
+              aria-hidden="true"
+              className="size-4 animate-spin text-muted-foreground"
+            />
+          ) : null}
+        </div>
+      ) : null}
+      {(updateWeight.error ?? removeDish.error) ? (
+        <Notice tone="error" className="mt-2.5">
+          {((updateWeight.error ?? removeDish.error) as Error).message}
+        </Notice>
+      ) : null}
+    </li>
+  );
+}
+
+function AddSection({ poolIds }: { poolIds: Set<string> }) {
   const [searchInput, setSearchInput] = useState("");
   const [submittedQuery, setSubmittedQuery] = useState("");
   const search = useCatalogSearch(submittedQuery);
+  const addDish = useAddPoolDish();
 
-  const poolIds = new Set((pool.data ?? []).map((dish) => dish.id));
-  const poolBusy = updateWeight.isPending || removeDish.isPending;
-
-  const renderPoolRow = (dish: PoolDish, index: number) => (
-    <List.Item key={dish.id}>
-      <m.div {...rowEnter(index)} className="dish-row">
-        <DishLine dish={dish} />
-        <WeightControl
-          dish={dish}
-          disabled={poolBusy}
-          onCommit={(value) =>
-            updateWeight.mutate({ dish_id: dish.id, tier: value })
-          }
-        />
-        <div className="dish-row-actions">
-          <Button
-            danger
-            loading={removeDish.isPending && removeDish.variables === dish.id}
-            disabled={poolBusy && removeDish.variables !== dish.id}
-            onClick={() =>
-              removeDish.mutate(dish.id, {
-                onSuccess: () => {
-                  void message.success(copy.pool.removedToast);
-                },
-              })
-            }
-          >
-            {copy.pool.remove}
-          </Button>
-        </div>
-      </m.div>
-    </List.Item>
-  );
-
-  const renderCatalogRow = (dish: Dish, index: number) => {
-    const inPool = poolIds.has(dish.id);
-    const adding = addDish.isPending && addDish.variables?.dish_id === dish.id;
-    return (
-      <List.Item key={dish.id}>
-        <m.div {...rowEnter(index)} className="dish-row dish-row-catalog">
-          <DishLine dish={dish} />
-          <div className="dish-row-actions">
-            <Button
-              loading={adding}
-              disabled={inPool || (addDish.isPending && !adding)}
-              onClick={() =>
-                addDish.mutate(
-                  { dish_id: dish.id, tier: DEFAULT_ADD_TIER },
-                  {
-                    onSuccess: () => {
-                      void message.success(copy.pool.addedToast);
-                    },
-                  },
-                )
-              }
-            >
-              {inPool ? copy.pool.added : copy.pool.add}
-            </Button>
-          </div>
-        </m.div>
-      </List.Item>
-    );
+  const handleSubmit = (event: FormEvent) => {
+    event.preventDefault();
+    setSubmittedQuery(searchInput.trim());
   };
 
   return (
-    <m.div {...pageEnter} className="container container-lg page-stack">
-      <PageHeader
-        title={copy.pool.title}
-        intro={copy.pool.intro}
-        trailing={<Link to="/">{copy.pool.back}</Link>}
-      />
+    <section className="space-y-4" aria-label="往池子加菜">
+      <header className="space-y-1">
+        <h2 className="font-serif text-xl font-medium">往池子加菜</h2>
+        <p className="text-sm text-muted-foreground">
+          搜菜谱库里的名字，入池默认「{TIER_LABELS[DEFAULT_POOL_TIER]}
+          」，之后随时改。
+        </p>
+      </header>
 
-      <section
-        className="page-stack page-stack-tight"
-        aria-label={copy.pool.title}
-      >
-        <ErrorAlert error={updateWeight.error ?? removeDish.error} />
-        {pool.isPending ? (
-          <LoadingBlock preset="list" label={copy.pool.loadingLabel} />
-        ) : null}
-        {pool.isError ? (
-          <ErrorAlert error={pool.error} onRetry={() => void pool.refetch()} />
-        ) : null}
-        {pool.data && pool.data.length === 0 ? (
-          <Empty
-            image={Empty.PRESENTED_IMAGE_SIMPLE}
-            description={copy.pool.empty}
-          />
-        ) : null}
-        {pool.data && pool.data.length > 0 ? (
-          <List dataSource={pool.data} renderItem={renderPoolRow} />
-        ) : null}
-      </section>
-
-      <section
-        className="page-stack page-stack-tight"
-        aria-label={copy.pool.addTitle}
-      >
-        <h2 className="section-title">{copy.pool.addTitle}</h2>
-        <p className="page-intro">{copy.pool.addIntro}</p>
-        <Input.Search
-          size="large"
-          allowClear
+      <form className="flex gap-2" onSubmit={handleSubmit}>
+        <Input
+          type="search"
+          name="q"
           maxLength={100}
-          placeholder={copy.pool.searchPlaceholder}
-          enterButton={copy.pool.searchButton}
+          placeholder="比如：番茄"
+          aria-label="搜索菜谱库"
           value={searchInput}
           onChange={(event) => setSearchInput(event.target.value)}
-          onSearch={(value) => setSubmittedQuery(value.trim())}
-          loading={search.isFetching}
         />
-        <ErrorAlert error={addDish.error} />
-        {search.isError ? (
-          <ErrorAlert
-            error={search.error}
-            onRetry={() => void search.refetch()}
-          />
+        <Button
+          type="submit"
+          variant="outline"
+          aria-busy={search.isFetching}
+          disabled={search.isFetching}
+        >
+          {search.isFetching ? (
+            <LoaderCircle aria-hidden="true" className="size-4 animate-spin" />
+          ) : (
+            <Search aria-hidden="true" className="size-4" />
+          )}
+          搜索
+        </Button>
+      </form>
+
+      {addDish.error ? (
+        <Notice tone="error">{addDish.error.message}</Notice>
+      ) : null}
+      {search.isError ? (
+        <Notice tone="error" onRetry={() => void search.refetch()}>
+          {search.error.message}
+        </Notice>
+      ) : null}
+      {search.data && search.data.length === 0 ? (
+        <p className="text-sm text-muted-foreground">
+          菜谱库里没有这道。换个写法试试，比如只搜两个字。
+        </p>
+      ) : null}
+      {search.data && search.data.length > 0 ? (
+        <ul className="divide-y divide-border rounded-md border border-border">
+          {search.data.map((dish) => (
+            <CatalogRow
+              key={dish.id}
+              dish={dish}
+              inPool={poolIds.has(dish.id)}
+              adding={
+                addDish.isPending && addDish.variables?.dish_id === dish.id
+              }
+              otherBusy={
+                addDish.isPending && addDish.variables?.dish_id !== dish.id
+              }
+              onAdd={() =>
+                addDish.mutate({ dish_id: dish.id, tier: DEFAULT_POOL_TIER })
+              }
+            />
+          ))}
+        </ul>
+      ) : null}
+    </section>
+  );
+}
+
+function CatalogRow({
+  dish,
+  inPool,
+  adding,
+  otherBusy,
+  onAdd,
+}: {
+  dish: Dish;
+  inPool: boolean;
+  adding: boolean;
+  otherBusy: boolean;
+  onAdd: () => void;
+}) {
+  return (
+    <li className="flex items-center justify-between gap-3 px-4 py-3">
+      <div className="min-w-0">
+        <p className="truncate">{dish.name}</p>
+        <p className="text-sm text-muted-foreground">{dish.category}</p>
+      </div>
+      <Button
+        variant="outline"
+        size="sm"
+        disabled={inPool || adding || otherBusy}
+        aria-busy={adding}
+        onClick={onAdd}
+      >
+        {adding ? (
+          <LoaderCircle aria-hidden="true" className="size-4 animate-spin" />
         ) : null}
-        {submittedQuery === "" ? (
-          <p className="catalog-hint">{copy.pool.searchHint}</p>
-        ) : null}
-        {search.data && search.data.length === 0 ? (
-          <Empty
-            image={Empty.PRESENTED_IMAGE_SIMPLE}
-            description={copy.pool.noResults}
-          />
-        ) : null}
-        {search.data && search.data.length > 0 ? (
-          <List dataSource={search.data} renderItem={renderCatalogRow} />
-        ) : null}
-      </section>
-    </m.div>
+        {inPool ? "已在池里" : "入池"}
+      </Button>
+    </li>
   );
 }

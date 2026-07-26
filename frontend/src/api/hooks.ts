@@ -10,6 +10,7 @@ import { ApiError } from "./client";
 import * as api from "./endpoints";
 import {
   catalogKey,
+  historyKey,
   mealKey,
   onboardingKey,
   poolKey,
@@ -48,6 +49,14 @@ export function useCandidatePool() {
   return useQuery({
     queryKey: poolKey,
     queryFn: ({ signal }) => api.listCandidatePool(signal),
+  });
+}
+
+export function useEatingRecords(limit = 20) {
+  return useQuery({
+    // 前缀仍是 historyKey：失效映射按前缀命中所有 limit 变体
+    queryKey: [...historyKey, limit] as const,
+    queryFn: ({ signal }) => api.listEatingRecords(limit, signal),
   });
 }
 
@@ -98,6 +107,18 @@ export function useRegister() {
   return useAuthMutation(api.register);
 }
 
+export function useLogout() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.logout(),
+    // 账户边界：丢弃这台设备上的一切缓存；RequireSession 看到 null 自然送回 /login
+    onSuccess: () => {
+      queryClient.removeQueries();
+      queryClient.setQueryData(sessionKey, null);
+    },
+  });
+}
+
 export function useBeginMeal() {
   const queryClient = useQueryClient();
   return useMutation({
@@ -123,6 +144,7 @@ export function useReroll() {
           error,
           "candidate_pool_empty",
           "decision_not_found",
+          "reroll_budget_exhausted",
           "not_found",
         )
       ) {
@@ -138,10 +160,72 @@ export function useAccept() {
     mutationFn: (decisionId: number) => api.acceptDecision(decisionId),
     // 响应是 AcceptanceResponse 而非 MealState：失效重取；页面在自己的
     // onSuccess 里用 response.recipe.dish.id 导航，无需额外请求
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: mealKey }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: mealKey });
+      void queryClient.invalidateQueries({ queryKey: historyKey });
+    },
     onError: (error) => {
       if (hasCode(error, "decision_not_found", "not_found")) {
         void queryClient.invalidateQueries({ queryKey: mealKey });
+      }
+    },
+  });
+}
+
+/** 三出口·放弃本顿。 */
+export function useAbandonMeal() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.abandonMeal(),
+    onSuccess: (state) => queryClient.setQueryData(mealKey, state),
+    onError: (error) => {
+      // 没有进行中的这一顿：界面陈旧，重取即回正确状态
+      if (hasCode(error, "meal_not_found", "not_found")) {
+        void queryClient.invalidateQueries({ queryKey: mealKey });
+      }
+    },
+  });
+}
+
+/** 三出口·亲自点一道（仅额度耗尽时解锁）。 */
+export function useHandPick() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (dishId: string) => api.handPickDish(dishId),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: mealKey });
+      void queryClient.invalidateQueries({ queryKey: historyKey });
+    },
+    onError: (error) => {
+      if (hasCode(error, "meal_not_found", "hand_pick_locked", "not_found")) {
+        void queryClient.invalidateQueries({ queryKey: mealKey });
+      }
+    },
+  });
+}
+
+/** 轻历史的补评分：可选、绝不拦路。 */
+export function useRateRecord() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { recordId: number; rating: Rating }) =>
+      api.rateEatingRecord(input.recordId, input.rating),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: historyKey });
+      // pool_admission / rejection_mark 都可能改变池子与 readiness
+      void queryClient.invalidateQueries({ queryKey: poolKey });
+      void queryClient.invalidateQueries({ queryKey: mealKey });
+    },
+    onError: (error) => {
+      if (
+        hasCode(
+          error,
+          "rating_conflict",
+          "eating_record_not_found",
+          "not_found",
+        )
+      ) {
+        void queryClient.invalidateQueries({ queryKey: historyKey });
       }
     },
   });
@@ -179,6 +263,35 @@ export function useAddPoolDish() {
       api.addPoolDish(input),
     // meal 一并失效：空池 ↔ ready 可能翻转
     onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: poolKey });
+      void queryClient.invalidateQueries({ queryKey: mealKey });
+    },
+  });
+}
+
+/**
+ * 经典起步包：十余道国民家常菜逐一入池，默认中档。
+ * 单道失败（已在池、暂不可加）跳过不打断——起步包是引导，不是事务。
+ */
+export function useStarterPack() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (dishes: readonly { id: string; tier: number }[]) => {
+      let added = 0;
+      for (const dish of dishes) {
+        try {
+          await api.addPoolDish({ dish_id: dish.id, tier: dish.tier });
+          added += 1;
+        } catch (error) {
+          if (!hasCode(error, "dish_unavailable", "invalid_request")) {
+            throw error;
+          }
+        }
+      }
+      return added;
+    },
+    onSettled: () => {
+      // 部分成功也要反映到界面：池子与 readiness 一并重取
       void queryClient.invalidateQueries({ queryKey: poolKey });
       void queryClient.invalidateQueries({ queryKey: mealKey });
     },

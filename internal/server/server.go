@@ -188,6 +188,7 @@ func (a *App) routes(webDir, catalogDir string) {
 	})
 	router.POST("/api/auth/register", a.register)
 	router.POST("/api/auth/login", a.login)
+	router.POST("/api/auth/logout", a.logout)
 	authorized := router.Group("/api", a.requireAccount)
 	authorized.GET("/auth/session", a.session)
 	authorized.GET("/catalog/dishes", a.searchCatalog)

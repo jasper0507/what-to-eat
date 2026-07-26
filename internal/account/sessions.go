@@ -211,6 +211,16 @@ func (s *Sessions) Verify(
 	return found, nil
 }
 
+// Revoke 注销一个会话 token。token 不存在或已过期也算成功——登出是幂等的。
+func (s *Sessions) Revoke(context context.Context, token string) error {
+	_, err := s.db.ExecContext(
+		context,
+		"DELETE FROM sessions WHERE token_hash = ?",
+		s.hashToken(token),
+	)
+	return err
+}
+
 func (s *Sessions) newGrant(owner Account) (Grant, []byte, error) {
 	randomBytes := make([]byte, 32)
 	if _, err := rand.Read(randomBytes); err != nil {

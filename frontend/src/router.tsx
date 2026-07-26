@@ -27,6 +27,10 @@ export const router = createBrowserRouter([
             lazy: lazyPage(() => import("@/pages/CandidatePoolPage")),
           },
           {
+            path: "/history",
+            lazy: lazyPage(() => import("@/pages/HistoryPage")),
+          },
+          {
             path: "/recipes",
             lazy: lazyPage(() => import("@/pages/RecipePage")),
           },
