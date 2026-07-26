@@ -126,6 +126,9 @@ type eatingRecordResponse struct {
 	Sequence int64 `json:"sequence"`
 }
 
+// weightedDish 的 weight 是抽样权重：pool 路径为经 Recency window 调整的
+// Preference weight，discovery 路径为相似度得分。两种量只各自参与
+// chooseWeightedDish 的加权抽样，永不混在同一候选列表里比较。
 type weightedDish struct {
 	id, name string
 	weight   float64
@@ -193,7 +196,7 @@ func scanActiveDecision(row *sql.Row) (mealState, error) {
 }
 
 func (m *mealLifecycle) Resume(context context.Context, accountID int64) (mealState, error) {
-	pendingRatings, err := m.unresolvedPendingRatings(context, nil, accountID)
+	pendingRatings, err := m.unresolvedPendingRatings(context, m.db, accountID)
 	if err != nil {
 		return mealState{}, err
 	}
@@ -238,26 +241,26 @@ func (m *mealLifecycle) Resume(context context.Context, accountID int64) (mealSt
 	return mealState{Status: mealStatusReady}, nil
 }
 
+// sqlQueryer 让同一读取逻辑既可跑在 *sql.DB 上也可跑在事务内。
+type sqlQueryer interface {
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+}
+
 func (m *mealLifecycle) unresolvedPendingRatings(
 	context context.Context,
-	transaction *sql.Tx,
+	queryer sqlQueryer,
 	accountID int64,
 ) ([]pendingRatingResponse, error) {
-	query := func() (*sql.Rows, error) {
-		const statement = `
-			SELECT pending_ratings.id, pending_ratings.meal_id, pending_ratings.meal_at,
-			       catalog_dishes.source_path, catalog_dishes.name
-			FROM pending_ratings
-			JOIN catalog_dishes ON catalog_dishes.source_path = pending_ratings.dish_id
-			WHERE pending_ratings.account_id = ? AND pending_ratings.rating IS NULL
-			ORDER BY pending_ratings.meal_at, pending_ratings.id
-		`
-		if transaction != nil {
-			return transaction.QueryContext(context, statement, accountID)
-		}
-		return m.db.QueryContext(context, statement, accountID)
-	}
-	rows, err := query()
+	rows, err := queryer.QueryContext(
+		context,
+		`SELECT pending_ratings.id, pending_ratings.meal_id, pending_ratings.meal_at,
+		        catalog_dishes.source_path, catalog_dishes.name
+		 FROM pending_ratings
+		 JOIN catalog_dishes ON catalog_dishes.source_path = pending_ratings.dish_id
+		 WHERE pending_ratings.account_id = ? AND pending_ratings.rating IS NULL
+		 ORDER BY pending_ratings.meal_at, pending_ratings.id`,
+		accountID,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -383,13 +386,10 @@ func (m *mealLifecycle) poolCandidates(
 		return poolSnapshot{}, err
 	}
 
-	fullCooldown := min(len(history), defaultCooldown)
+	fullCooldown := cooldownSize(history)
 	snapshot := poolSnapshot{members: allCandidates, history: history}
 	for cooldown := fullCooldown; cooldown >= 0; cooldown-- {
-		excluded := make(map[string]bool, cooldown)
-		for _, dishID := range history[:cooldown] {
-			excluded[dishID] = true
-		}
+		excluded := cooldownSet(history, cooldown)
 		candidates := make([]weightedDish, 0, len(allCandidates))
 		for _, candidate := range allCandidates {
 			if !excluded[candidate.id] {
@@ -401,13 +401,7 @@ func (m *mealLifecycle) poolCandidates(
 		}
 		if len(candidates) > 0 {
 			if cooldown == fullCooldown {
-				for _, dishID := range history[fullCooldown:] {
-					for index := range candidates {
-						if candidates[index].id == dishID {
-							candidates[index].weight /= 2
-						}
-					}
-				}
+				halveRecentWeights(candidates, history)
 			}
 			snapshot.selectable = candidates
 			return snapshot, nil
@@ -415,6 +409,68 @@ func (m *mealLifecycle) poolCandidates(
 	}
 	snapshot.selectable = allCandidates
 	return snapshot, nil
+}
+
+// 选择内核：Cooldown、Recency window 与 Session penalty 的唯一实现，
+// pool 与 discovery 两条路径共用。
+
+// cooldownSize 把 ADR-0002 的 Cooldown 长度折算到既有 Eating record 数量上。
+func cooldownSize(history []string) int {
+	return min(len(history), defaultCooldown)
+}
+
+// cooldownSet 返回处于 Cooldown 的 Dish 集合（history 最近 size 条）。
+func cooldownSet(history []string, size int) map[string]bool {
+	excluded := make(map[string]bool, size)
+	for _, dishID := range history[:size] {
+		excluded[dishID] = true
+	}
+	return excluded
+}
+
+// halveRecentWeights 对 Recency window 内（Cooldown 之外）的每次既往
+// Acceptance 把对应 Dish 的抽样权重减半。
+func halveRecentWeights(candidates []weightedDish, history []string) {
+	for _, dishID := range history[cooldownSize(history):] {
+		for index := range candidates {
+			if candidates[index].id == dishID {
+				candidates[index].weight /= 2
+			}
+		}
+	}
+}
+
+// leastShownDishes 应用 Session penalty：只保留本 Meal 内展示次数最少的 Dish。
+func leastShownDishes(candidates []weightedDish, shown map[string]int) []weightedDish {
+	least := make([]weightedDish, 0, len(candidates))
+	minShown := -1
+	for _, candidate := range candidates {
+		count := shown[candidate.id]
+		switch {
+		case minShown == -1 || count < minShown:
+			minShown = count
+			least = append(least[:0], candidate)
+		case count == minShown:
+			least = append(least, candidate)
+		}
+	}
+	return least
+}
+
+// topWeightDishes 保留抽样权重最高的 Dish，并列全部保留。
+func topWeightDishes(candidates []weightedDish) []weightedDish {
+	top := make([]weightedDish, 0, len(candidates))
+	best := 0.0
+	for _, candidate := range candidates {
+		switch {
+		case len(top) == 0 || candidate.weight > best:
+			best = candidate.weight
+			top = append(top[:0], candidate)
+		case candidate.weight == best:
+			top = append(top, candidate)
+		}
+	}
+	return top
 }
 
 func (m *mealLifecycle) recentRerolls(
@@ -441,6 +497,40 @@ func (m *mealLifecycle) recentRerolls(
 		m.discovery.RecentMealWindow,
 	).Scan(&rerolls)
 	return rerolls, err
+}
+
+// mealShownCounts 统计本 Meal 内已展示的 Dish（Session penalty 的输入）
+// 以及 Decision 与 Discovery 的数量。
+func mealShownCounts(
+	context context.Context,
+	transaction *sql.Tx,
+	mealID int64,
+) (shown map[string]int, decisionCount, discoveryCount int, err error) {
+	rows, err := transaction.QueryContext(
+		context,
+		"SELECT dish_id, mode FROM decisions WHERE meal_id = ?",
+		mealID,
+	)
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	shown = make(map[string]int)
+	for rows.Next() {
+		var dishID, mode string
+		if err := rows.Scan(&dishID, &mode); err != nil {
+			rows.Close()
+			return nil, 0, 0, err
+		}
+		shown[dishID]++
+		decisionCount++
+		if mode == string(decisionModeDiscovery) {
+			discoveryCount++
+		}
+	}
+	if err := rows.Close(); err != nil {
+		return nil, 0, 0, err
+	}
+	return shown, decisionCount, discoveryCount, rows.Err()
 }
 
 func (m *mealLifecycle) discoveryPressure(
@@ -498,85 +588,74 @@ func (m *mealLifecycle) discoveryDish(
 	}
 	defer rows.Close()
 
+	excluded := cooldownSet(pool.history, cooldownSize(pool.history))
 	candidates := make([]weightedDish, 0)
-	minShown := -1
-	bestSimilarity := 0.0
-	fullCooldown := min(len(pool.history), defaultCooldown)
-	cooldown := make(map[string]bool, fullCooldown)
-	for _, dishID := range pool.history[:fullCooldown] {
-		cooldown[dishID] = true
-	}
 	for rows.Next() {
 		var candidate weightedDish
 		if err := rows.Scan(&candidate.id, &candidate.name); err != nil {
 			return weightedDish{}, false, err
 		}
-		if cooldown[candidate.id] {
+		if excluded[candidate.id] {
 			continue
 		}
 		for _, reference := range pool.members {
 			candidate.weight = max(candidate.weight, dishSimilarity(candidate, reference)*reference.weight)
 		}
-		if candidate.weight == 0 {
-			continue
-		}
-		for _, dishID := range pool.history[fullCooldown:] {
-			if candidate.id == dishID {
-				candidate.weight /= 2
-			}
-		}
-		timesShown := shown[candidate.id]
-		switch {
-		case minShown == -1 || timesShown < minShown:
-			minShown = timesShown
-			bestSimilarity = candidate.weight
-			candidates = append(candidates[:0], candidate)
-		case timesShown == minShown && candidate.weight > bestSimilarity:
-			bestSimilarity = candidate.weight
-			candidates = append(candidates[:0], candidate)
-		case timesShown == minShown && candidate.weight == bestSimilarity:
+		if candidate.weight > 0 {
 			candidates = append(candidates, candidate)
 		}
 	}
 	if err := rows.Err(); err != nil {
 		return weightedDish{}, false, err
 	}
+	halveRecentWeights(candidates, pool.history)
+	candidates = topWeightDishes(leastShownDishes(candidates, shown))
 	if len(candidates) == 0 {
 		return weightedDish{}, false, nil
 	}
 	return m.chooseWeightedDish(candidates), true, nil
 }
 
+type selectionInput struct {
+	pool           poolSnapshot
+	poolChoices    []weightedDish
+	rerolls        int
+	discoveryCount int
+	shown          map[string]int
+}
+
+// chooseDecision 决定本次 Decision 走 pool 还是 Discovery，并只为选中的
+// 路径消耗随机抽样。
 func (m *mealLifecycle) chooseDecision(
 	context context.Context,
 	transaction *sql.Tx,
 	accountID int64,
-	pool poolSnapshot,
-	fallback weightedDish,
-	rerolls, discoveryCount int,
-	shown map[string]int,
+	input selectionInput,
 ) (decisionChoice, error) {
-	choice := decisionChoice{dish: fallback, mode: decisionModePool}
-	triggered, reason := m.discoveryPressure(pool, rerolls)
-	if !triggered || discoveryCount >= m.discovery.MaxDiscoveriesPerMeal {
-		return choice, nil
+	triggered, reason := m.discoveryPressure(input.pool, input.rerolls)
+	if triggered && input.discoveryCount < m.discovery.MaxDiscoveriesPerMeal {
+		discovery, found, err := m.discoveryDish(
+			context,
+			transaction,
+			accountID,
+			input.pool,
+			input.shown,
+		)
+		if err != nil {
+			return decisionChoice{}, err
+		}
+		if found {
+			return decisionChoice{
+				dish:   discovery,
+				mode:   decisionModeDiscovery,
+				reason: reason,
+			}, nil
+		}
 	}
-	discovery, found, err := m.discoveryDish(
-		context,
-		transaction,
-		accountID,
-		pool,
-		shown,
-	)
-	if err != nil {
-		return decisionChoice{}, err
-	}
-	if found {
-		choice.dish = discovery
-		choice.mode = decisionModeDiscovery
-		choice.reason = reason
-	}
-	return choice, nil
+	return decisionChoice{
+		dish: m.chooseWeightedDish(input.poolChoices),
+		mode: decisionModePool,
+	}, nil
 }
 
 func dishSimilarity(candidate, reference weightedDish) float64 {
@@ -672,16 +751,11 @@ func (m *mealLifecycle) Begin(context context.Context, accountID int64) (state m
 	if err != nil {
 		return mealState{}, false, err
 	}
-	choice, err := m.chooseDecision(
-		context,
-		transaction,
-		accountID,
-		pool,
-		m.chooseWeightedDish(pool.selectable),
-		recentRerolls,
-		0,
-		nil,
-	)
+	choice, err := m.chooseDecision(context, transaction, accountID, selectionInput{
+		pool:        pool,
+		poolChoices: pool.selectable,
+		rerolls:     recentRerolls,
+	})
 	if err != nil {
 		return mealState{}, false, err
 	}
@@ -756,15 +830,9 @@ func (m *mealLifecycle) Reroll(
 	if replacementID.Valid {
 		replacement, err := scanActiveDecision(transaction.QueryRowContext(
 			context,
-			`SELECT decisions.id, meals.id, decisions.mode, decisions.reason,
-				        catalog_dishes.source_path, catalog_dishes.name
-			 FROM decisions
-			 JOIN meals ON meals.id = decisions.meal_id
-			 JOIN catalog_dishes ON catalog_dishes.source_path = decisions.dish_id
-			 WHERE decisions.id = ? AND meals.account_id = ? AND meals.status = 'active'
-			       AND decisions.status = 'active' AND decisions.rerolled_to_id IS NULL`,
-			replacementID.Int64,
+			activeDecisionQuery+" AND decisions.id = ?",
 			accountID,
+			replacementID.Int64,
 		))
 		if errors.Is(err, sql.ErrNoRows) {
 			return mealState{}, errDecisionNotFound
@@ -783,50 +851,20 @@ func (m *mealLifecycle) Reroll(
 		return mealState{Status: mealStatusCandidatePoolEmpty}, errCandidatePoolEmpty
 	}
 
-	shown := make(map[string]int)
-	rows, err := transaction.QueryContext(
-		context,
-		"SELECT dish_id, mode FROM decisions WHERE meal_id = ?",
-		mealID,
-	)
+	shown, decisionCount, discoveryCount, err := mealShownCounts(context, transaction, mealID)
 	if err != nil {
 		return mealState{}, err
 	}
-	decisionCount := 0
-	discoveryCount := 0
-	for rows.Next() {
-		var dishID, mode string
-		if err := rows.Scan(&dishID, &mode); err != nil {
-			rows.Close()
-			return mealState{}, err
-		}
-		shown[dishID]++
-		decisionCount++
-		if mode == "discovery" {
-			discoveryCount++
-		}
-	}
-	if err := rows.Close(); err != nil {
-		return mealState{}, err
-	}
-	if err := rows.Err(); err != nil {
-		return mealState{}, err
-	}
 
-	leastShown := make([]weightedDish, 0, len(pool.selectable))
-	minShown := -1
-	for _, candidate := range pool.selectable {
-		if len(pool.selectable) > 1 && candidate.id == currentDishID {
-			continue
+	poolChoices := pool.selectable
+	if len(poolChoices) > 1 {
+		remaining := make([]weightedDish, 0, len(poolChoices))
+		for _, candidate := range poolChoices {
+			if candidate.id != currentDishID {
+				remaining = append(remaining, candidate)
+			}
 		}
-		count := shown[candidate.id]
-		switch {
-		case minShown == -1 || count < minShown:
-			minShown = count
-			leastShown = append(leastShown[:0], candidate)
-		case count == minShown:
-			leastShown = append(leastShown, candidate)
-		}
+		poolChoices = remaining
 	}
 	recentRerolls, err := m.recentRerolls(context, transaction, accountID)
 	if err != nil {
@@ -834,16 +872,13 @@ func (m *mealLifecycle) Reroll(
 	}
 	completedRerolls := max(0, decisionCount-1)
 	rerollsIncludingCurrentRequest := completedRerolls + 1
-	choice, err := m.chooseDecision(
-		context,
-		transaction,
-		accountID,
-		pool,
-		m.chooseWeightedDish(leastShown),
-		rerollsIncludingCurrentRequest+recentRerolls,
-		discoveryCount,
-		shown,
-	)
+	choice, err := m.chooseDecision(context, transaction, accountID, selectionInput{
+		pool:           pool,
+		poolChoices:    leastShownDishes(poolChoices, shown),
+		rerolls:        rerollsIncludingCurrentRequest + recentRerolls,
+		discoveryCount: discoveryCount,
+		shown:          shown,
+	})
 	if err != nil {
 		return mealState{}, err
 	}
