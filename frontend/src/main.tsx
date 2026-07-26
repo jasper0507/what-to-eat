@@ -6,8 +6,10 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import { RouterProvider } from "react-router-dom";
 import "@fontsource-variable/noto-serif-sc";
-import "antd/dist/reset.css";
+import "@fontsource-variable/noto-sans-sc";
+import "./styles/antd-reset.css";
 import "./styles.css";
+import "./styles/globals.css";
 
 import { queryClient } from "@/api/queryClient";
 import { router } from "@/router";

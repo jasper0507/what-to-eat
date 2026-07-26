@@ -1,0 +1,3 @@
+/* 旧世界的 antd reset 压进最低优先级 layer（先于 Tailwind 各层声明），
+   否则它的无层级 button/p 规则会盖过新系统的分层 utilities。随 antd 迁移一并退役。 */
+@import "antd/dist/reset.css" layer(antd-reset);

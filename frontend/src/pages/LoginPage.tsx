@@ -1,24 +1,35 @@
-import { Alert, Button, Card, Form, Input, Segmented } from "antd";
-import { Eye, EyeOff } from "lucide-react";
-import { m } from "motion/react";
-import { useState } from "react";
+import { Eye, EyeOff, LoaderCircle } from "lucide-react";
+import { useState, type FormEvent } from "react";
 import { Navigate } from "react-router-dom";
 
+import { ApiError } from "@/api/client";
 import { useLogin, useRegister, useSession } from "@/api/hooks";
 import { peekSessionExpired } from "@/api/queryClient";
-import type { Credentials } from "@/api/types";
-import { ErrorAlert } from "@/components/ErrorAlert";
-import { PageShell } from "@/components/PageShell";
-import { copy } from "@/lib/copy";
-import { pageEnter } from "@/lib/motion";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { useRetryAfter } from "@/lib/useRetryAfter";
-import { passwordRules, usernameRules } from "@/lib/validation";
+import { validatePassword, validateUsername } from "@/lib/validation";
 
 type Mode = "login" | "register";
+
+const text = {
+  login: { submit: "登录", switchHint: "还没有账号？", switchAction: "注册" },
+  register: { submit: "注册", switchHint: "已有账号？", switchAction: "登录" },
+} as const;
+
+interface FieldErrors {
+  username?: string;
+  password?: string;
+}
 
 export default function LoginPage() {
   const session = useSession();
   const [mode, setMode] = useState<Mode>("login");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
   const loginMutation = useLogin();
   const registerMutation = useRegister();
   const active = mode === "login" ? loginMutation : registerMutation;
@@ -27,88 +38,192 @@ export default function LoginPage() {
   const expired = peekSessionExpired();
 
   if (session.isPending) {
-    return <PageShell width="sm">{null}</PageShell>;
+    return (
+      <div
+        role="status"
+        aria-label="正在加载"
+        className="flex min-h-dvh items-center justify-center bg-background"
+      >
+        <LoaderCircle
+          aria-hidden="true"
+          className="size-5 animate-spin text-muted-foreground"
+        />
+      </div>
+    );
   }
   if (session.data) {
     // 注册成功直达 Onboarding；登录成功回主页（主页门控仍会按服务端状态兜底）
     return <Navigate to={mode === "register" ? "/onboarding" : "/"} replace />;
   }
 
-  const switchMode = (next: Mode) => {
-    setMode(next);
+  const t = text[mode];
+
+  const switchMode = () => {
+    setMode(mode === "login" ? "register" : "login");
+    setFieldErrors({});
     loginMutation.reset();
     registerMutation.reset();
   };
 
+  const handleSubmit = (event: FormEvent) => {
+    event.preventDefault();
+    // 空值给指路文案而非念规则；焦点移到第一个出错字段，读屏随 label+describedby 自然播报
+    const errors: FieldErrors = {
+      username: username === "" ? "输入用户名" : validateUsername(username),
+      password: password === "" ? "输入密码" : validatePassword(password),
+    };
+    setFieldErrors(errors);
+    if (errors.username || errors.password) {
+      document
+        .getElementById(errors.username ? "username" : "password")
+        ?.focus();
+      return;
+    }
+    active.mutate({ username, password });
+  };
+
+  const apiError = active.error instanceof ApiError ? active.error : undefined;
+  const throttled = apiError?.code === "rate_limited" && retryRemaining > 0;
+
   return (
-    <PageShell width="sm">
-      <m.div {...pageEnter}>
-        <Card variant="borderless" className="login-card">
-          <div className="page-stack page-stack-tight">
-            <h1 className="page-title">{copy.auth.title}</h1>
-            <p className="page-intro">{copy.auth.intro}</p>
-            <Segmented
-              block
-              size="large"
-              value={mode}
-              onChange={(value) => switchMode(value as Mode)}
-              options={[
-                { label: copy.auth.loginTab, value: "login" },
-                { label: copy.auth.registerTab, value: "register" },
-              ]}
+    <main className="flex min-h-dvh flex-col items-center justify-center bg-background px-6 pb-[10vh] font-sans text-base text-foreground antialiased">
+      <div className="w-full max-w-[21.25rem]">
+        <header className="animate-rise">
+          <h1 className="font-serif text-4xl leading-snug font-medium tracking-wide">
+            今天吃什么<span className="text-brand">？</span>
+          </h1>
+          <p className="mt-3 text-muted-foreground">进来，定这一顿。</p>
+        </header>
+
+        <form
+          className="animate-rise mt-9 space-y-5 [animation-delay:60ms]"
+          noValidate
+          onSubmit={handleSubmit}
+        >
+          {expired && !active.error ? (
+            <div className="rounded-md border border-border bg-secondary px-3 py-2 text-sm">
+              登录过期了，再进来一次。
+            </div>
+          ) : null}
+          {active.error ? (
+            <div
+              role="alert"
+              className="rounded-md border border-destructive/25 bg-destructive/5 px-3 py-2 text-sm text-destructive"
+            >
+              {active.error.message}
+              {throttled ? (
+                <>
+                  {/* 倒计时秒数只更新视觉；读屏挂载时播报一次静态提示 */}
+                  <span aria-hidden="true">（{retryRemaining} 秒后再试）</span>
+                  <span className="sr-only">稍后再试</span>
+                </>
+              ) : null}
+            </div>
+          ) : null}
+
+          <div className="space-y-2">
+            <Label htmlFor="username">用户名</Label>
+            <Input
+              id="username"
+              name="username"
+              autoComplete="username"
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
+              value={username}
+              onChange={(event) => {
+                setUsername(event.target.value);
+                setFieldErrors((prev) => ({ ...prev, username: undefined }));
+              }}
+              aria-invalid={fieldErrors.username ? true : undefined}
+              aria-describedby={
+                fieldErrors.username ? "username-error" : undefined
+              }
             />
-            {expired && !active.error ? (
-              <Alert
-                type="warning"
-                showIcon
-                message={copy.auth.sessionExpired}
+            {fieldErrors.username ? (
+              <p id="username-error" className="text-sm text-destructive">
+                {fieldErrors.username}
+              </p>
+            ) : null}
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="password">密码</Label>
+            <div className="relative">
+              <Input
+                id="password"
+                name="password"
+                type={showPassword ? "text" : "password"}
+                autoComplete={
+                  mode === "login" ? "current-password" : "new-password"
+                }
+                className="pr-10"
+                value={password}
+                onChange={(event) => {
+                  setPassword(event.target.value);
+                  setFieldErrors((prev) => ({ ...prev, password: undefined }));
+                }}
+                aria-invalid={fieldErrors.password ? true : undefined}
+                aria-describedby={
+                  fieldErrors.password
+                    ? "password-error"
+                    : mode === "register"
+                      ? "password-hint"
+                      : undefined
+                }
+              />
+              <button
+                type="button"
+                className="absolute inset-y-0 right-0 flex w-10 cursor-pointer items-center justify-center rounded-md text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                aria-label={showPassword ? "隐藏密码" : "显示密码"}
+                onClick={() => setShowPassword((visible) => !visible)}
+              >
+                {showPassword ? (
+                  <Eye aria-hidden="true" className="size-4" />
+                ) : (
+                  <EyeOff aria-hidden="true" className="size-4" />
+                )}
+              </button>
+            </div>
+            {fieldErrors.password ? (
+              <p id="password-error" className="text-sm text-destructive">
+                {fieldErrors.password}
+              </p>
+            ) : mode === "register" ? (
+              <p id="password-hint" className="text-sm text-muted-foreground">
+                至少 8 个字符。
+              </p>
+            ) : null}
+          </div>
+
+          <Button
+            type="submit"
+            size="lg"
+            className="mt-2 w-full"
+            aria-busy={active.isPending}
+            disabled={active.isPending || retryRemaining > 0}
+          >
+            {active.isPending ? (
+              <LoaderCircle
+                aria-hidden="true"
+                className="size-4 animate-spin"
               />
             ) : null}
-            <ErrorAlert error={active.error} retryRemaining={retryRemaining} />
-            <Form<Credentials>
-              layout="vertical"
-              requiredMark={false}
-              validateTrigger={["onBlur", "onSubmit"]}
-              onFinish={(values) => active.mutate(values)}
-            >
-              <Form.Item
-                label={copy.auth.username}
-                name="username"
-                rules={usernameRules}
-              >
-                <Input size="large" autoComplete="username" />
-              </Form.Item>
-              <Form.Item
-                label={copy.auth.password}
-                name="password"
-                rules={passwordRules}
-              >
-                <Input.Password
-                  size="large"
-                  autoComplete={
-                    mode === "login" ? "current-password" : "new-password"
-                  }
-                  iconRender={(visible) =>
-                    visible ? <Eye size={16} /> : <EyeOff size={16} />
-                  }
-                />
-              </Form.Item>
-              <Button
-                block
-                type="primary"
-                size="large"
-                htmlType="submit"
-                loading={active.isPending}
-                disabled={retryRemaining > 0}
-              >
-                {mode === "login"
-                  ? copy.auth.loginSubmit
-                  : copy.auth.registerSubmit}
-              </Button>
-            </Form>
-          </div>
-        </Card>
-      </m.div>
-    </PageShell>
+            {t.submit}
+          </Button>
+        </form>
+
+        <p className="animate-rise mt-7 text-sm text-muted-foreground [animation-delay:120ms]">
+          {t.switchHint}
+          <button
+            type="button"
+            className="-mx-1 -my-2 cursor-pointer rounded-sm px-1 py-2 text-brand-ink underline decoration-brand-ink/40 underline-offset-4 outline-none hover:decoration-brand-ink focus-visible:ring-2 focus-visible:ring-ring"
+            onClick={switchMode}
+          >
+            {t.switchAction}
+          </button>
+        </p>
+      </div>
+    </main>
   );
 }

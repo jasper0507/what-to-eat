@@ -1,0 +1,148 @@
+/* 新视觉系统唯一 token 来源（对照 claude.ai：平坦暖纸、极少色数、衬线展示字）。
+   shadcn/ui 语义命名 + Tailwind v4 @theme；旧 styles.css/theme.ts 属旧世界，随各页迁移逐步废弃。 */
+
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+:root {
+  /* 纸与墨 */
+  --background: #faf9f5;
+  --foreground: #262625;
+
+  /* 白底面（输入框、弹层）——平坦，靠发丝边框而非投影分层 */
+  --card: #ffffff;
+  --card-foreground: #262625;
+  --popover: #ffffff;
+  --popover-foreground: #262625;
+
+  /* 主按钮 = 炭墨；品牌陶色只做点睛（brand） */
+  --primary: #262625;
+  --primary-foreground: #faf9f5;
+  --secondary: #f0eee6;
+  --secondary-foreground: #262625;
+  --muted: #f0eee6;
+  --muted-foreground: #6f6b60;
+  --accent: #f0eee6;
+  --accent-foreground: #262625;
+
+  /* 品牌陶色：签名问号、聚焦环；brand-ink 是正文字号可用的深陶（≥4.5:1） */
+  --brand: #c96442;
+  --brand-foreground: #ffffff;
+  --brand-ink: #a54a2c;
+
+  --destructive: #b3382d;
+  --destructive-foreground: #ffffff;
+
+  --border: #e4e0d5;
+  --input: #d6d1c2;
+  --ring: #c96442;
+
+  --radius: 0.625rem;
+}
+
+/* 暗色 token 预留（本轮不出货、不接开关）；值对照 claude.ai 暗色。 */
+.dark {
+  --background: #262624;
+  --foreground: #f0efea;
+  --card: #30302e;
+  --card-foreground: #f0efea;
+  --popover: #30302e;
+  --popover-foreground: #f0efea;
+  --primary: #faf9f5;
+  --primary-foreground: #262625;
+  --secondary: #3a3936;
+  --secondary-foreground: #f0efea;
+  --muted: #3a3936;
+  --muted-foreground: #a8a396;
+  --accent: #3a3936;
+  --accent-foreground: #f0efea;
+  --brand: #c96442;
+  --brand-foreground: #ffffff;
+  --brand-ink: #da8a66;
+  --destructive: #d8564a;
+  --destructive-foreground: #ffffff;
+  --border: #3e3d39;
+  --input: #4a4944;
+  --ring: #c96442;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-brand: var(--brand);
+  --color-brand-foreground: var(--brand-foreground);
+  --color-brand-ink: var(--brand-ink);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+
+  /* 字体：展示衬线 + 系统黑体正文 */
+  --font-serif:
+    "Noto Serif SC Variable", "Noto Serif SC", "Songti SC", "STSong", "SimSun",
+    serif;
+  --font-sans:
+    "Noto Sans SC Variable", -apple-system, "PingFang SC", "Hiragino Sans GB",
+    "Noto Sans SC", "Microsoft YaHei", "Segoe UI", system-ui, sans-serif;
+
+  /* 正文 15px/1.6、小字 13px——claude.ai 的紧凑度 */
+  --text-base: 0.9375rem;
+  --text-base--line-height: 1.6;
+  --text-sm: 0.8125rem;
+  --text-sm--line-height: 1.5;
+}
+
+/* 浏览器自动填充会刷上系统淡蓝底，用 inset shadow 压回白底（不产生可见投影） */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus {
+  -webkit-box-shadow: 0 0 0 1000px var(--card) inset;
+  -webkit-text-fill-color: var(--foreground);
+  caret-color: var(--foreground);
+  transition: background-color 9999s ease-out;
+}
+
+/* 选区高亮跟品牌色走，不让系统蓝闯进暖纸 */
+::selection {
+  background: color-mix(in srgb, var(--brand) 22%, transparent);
+}
+
+/* 入场动效：一次 6px 上浮淡入，一拍内完成 */
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@utility animate-rise {
+  animation: rise-in 0.35s cubic-bezier(0.2, 0, 0, 1) both;
+
+  @media (prefers-reduced-motion: reduce) {
+    animation: none;
+  }
+}

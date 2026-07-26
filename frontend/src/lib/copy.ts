@@ -87,8 +87,8 @@ export const copy = {
     skipToMain: "跳到主要内容",
   },
   errors: {
-    network: "网络异常，请检查连接后重试",
-    unexpected: "服务暂时不可用，请稍后重试",
+    network: "网络不通，检查一下再试",
+    unexpected: "服务暂时不可用，稍后再试",
   },
 } as const;
 
