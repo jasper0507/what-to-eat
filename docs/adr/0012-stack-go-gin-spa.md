@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Partially superseded: the UI-kit decision (Ant Design) is superseded by [ADR-0024](0024-tailwind-shadcn-ui.md) (2026-07-27, Tailwind v4 + shadcn/ui); the NIM onboarding items are superseded by [ADR-0023](0023-taste-interview-abolished.md). Backend, build tooling, routing, and SQLite decisions remain accepted.
 
 ## Context
 
