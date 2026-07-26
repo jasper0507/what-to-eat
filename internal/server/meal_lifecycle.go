@@ -659,19 +659,18 @@ func (m *mealLifecycle) chooseDecision(
 }
 
 func dishSimilarity(candidate, reference weightedDish) float64 {
-	candidatePath := strings.Split(candidate.id, "/")
-	referencePath := strings.Split(reference.id, "/")
+	candidateTaxonomy := sourcePathTaxonomy(candidate.id)
+	referenceTaxonomy := sourcePathTaxonomy(reference.id)
 	score := 0.0
-	if len(candidatePath) > 1 &&
-		len(referencePath) > 1 &&
-		candidatePath[0] == referencePath[0] {
+	if candidateTaxonomy.category != "" &&
+		candidateTaxonomy.category == referenceTaxonomy.category {
 		score += 4
 	}
 	referenceTags := make(map[string]bool)
-	for _, tag := range referencePath[1:max(1, len(referencePath)-1)] {
+	for _, tag := range referenceTaxonomy.tags {
 		referenceTags[tag] = true
 	}
-	for _, tag := range candidatePath[1:max(1, len(candidatePath)-1)] {
+	for _, tag := range candidateTaxonomy.tags {
 		if referenceTags[tag] {
 			score += 2
 		}

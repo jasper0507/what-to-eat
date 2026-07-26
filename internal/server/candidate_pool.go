@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"net/http"
-	"strings"
 
 	"github.com/gin-gonic/gin"
 )
@@ -313,6 +312,3 @@ func validPreferenceWeight(weight float64) bool {
 	return weight >= minPreferenceWeight && weight <= maxPreferenceWeight
 }
 
-func validDishID(dishID string) bool {
-	return dishID != "" && dishID == strings.TrimSpace(dishID) && len(dishID) <= 500
-}

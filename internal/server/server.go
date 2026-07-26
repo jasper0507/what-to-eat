@@ -12,7 +12,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
 )
@@ -98,14 +97,6 @@ type App struct {
 	candidatePool *candidatePool
 	mealLifecycle *mealLifecycle
 	onboarding    *onboardingInterview
-}
-
-type catalogDishResponse struct {
-	ID         string   `json:"id"`
-	Name       string   `json:"name"`
-	Category   string   `json:"category"`
-	RecipePath string   `json:"recipe_path"`
-	Tags       []string `json:"tags"`
 }
 
 func New(config Config) (*App, error) {
@@ -216,45 +207,6 @@ func (a *App) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 
 func (a *App) Close() error {
 	return a.db.Close()
-}
-
-func (a *App) searchCatalog(context *gin.Context) {
-	query := strings.TrimSpace(context.Query("q"))
-	if query == "" || utf8.RuneCountInString(query) > 100 {
-		writeError(context, http.StatusBadRequest, "invalid_query", "请输入有效的 Dish 名称")
-		return
-	}
-
-	rows, err := a.db.QueryContext(
-		context,
-		`SELECT source_path, name
-		 FROM catalog_dishes
-		 WHERE instr(name, ?) > 0
-		 ORDER BY name
-		 LIMIT 50`,
-		query,
-	)
-	if err != nil {
-		writeInternalError(context, "search Catalog", err)
-		return
-	}
-	defer rows.Close()
-
-	dishes := make([]catalogDishResponse, 0)
-	for rows.Next() {
-		var sourcePath, name string
-		if err := rows.Scan(&sourcePath, &name); err != nil {
-			writeInternalError(context, "read Catalog search result", err)
-			return
-		}
-		dishes = append(dishes, catalogDish(sourcePath, name))
-	}
-	if err := rows.Err(); err != nil {
-		writeInternalError(context, "finish Catalog search", err)
-		return
-	}
-
-	context.JSON(http.StatusOK, gin.H{"dishes": dishes})
 }
 
 func writeError(context *gin.Context, status int, code, message string) {

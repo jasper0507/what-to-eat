@@ -34,6 +34,29 @@ var howToCookCategories = map[string]string{
 	"vegetable_dish": "素菜",
 }
 
+type catalogDishResponse struct {
+	ID         string   `json:"id"`
+	Name       string   `json:"name"`
+	Category   string   `json:"category"`
+	RecipePath string   `json:"recipe_path"`
+	Tags       []string `json:"tags"`
+}
+
+// dishTaxonomy 是 Catalog source_path 编码规则的唯一出处：首段是类别目录，
+// 末段是 Recipe 文件名，中间各段是标签。单段路径没有类别与标签。
+type dishTaxonomy struct {
+	category string
+	tags     []string
+}
+
+func sourcePathTaxonomy(sourcePath string) dishTaxonomy {
+	parts := strings.Split(sourcePath, "/")
+	if len(parts) < 2 {
+		return dishTaxonomy{}
+	}
+	return dishTaxonomy{category: parts[0], tags: parts[1 : len(parts)-1]}
+}
+
 func catalogDish(sourcePath, name string) catalogDishResponse {
 	dish := catalogDishResponse{
 		ID:         sourcePath,
@@ -41,17 +64,60 @@ func catalogDish(sourcePath, name string) catalogDishResponse {
 		RecipePath: sourcePath,
 		Tags:       []string{},
 	}
-	pathParts := strings.Split(sourcePath, "/")
-	if len(pathParts) == 1 {
+	taxonomy := sourcePathTaxonomy(sourcePath)
+	if taxonomy.category == "" {
 		dish.Category = "其他"
 		return dish
 	}
-	dish.Category = howToCookCategories[pathParts[0]]
+	dish.Category = howToCookCategories[taxonomy.category]
 	if dish.Category == "" {
-		dish.Category = pathParts[0]
+		dish.Category = taxonomy.category
 	}
-	dish.Tags = pathParts[1 : len(pathParts)-1]
+	dish.Tags = taxonomy.tags
 	return dish
+}
+
+func validDishID(dishID string) bool {
+	return dishID != "" && dishID == strings.TrimSpace(dishID) && len(dishID) <= 500
+}
+
+func (a *App) searchCatalog(context *gin.Context) {
+	query := strings.TrimSpace(context.Query("q"))
+	if query == "" || utf8.RuneCountInString(query) > 100 {
+		writeError(context, http.StatusBadRequest, "invalid_query", "请输入有效的 Dish 名称")
+		return
+	}
+
+	rows, err := a.db.QueryContext(
+		context,
+		`SELECT source_path, name
+		 FROM catalog_dishes
+		 WHERE instr(name, ?) > 0
+		 ORDER BY name
+		 LIMIT 50`,
+		query,
+	)
+	if err != nil {
+		writeInternalError(context, "search Catalog", err)
+		return
+	}
+	defer rows.Close()
+
+	dishes := make([]catalogDishResponse, 0)
+	for rows.Next() {
+		var sourcePath, name string
+		if err := rows.Scan(&sourcePath, &name); err != nil {
+			writeInternalError(context, "read Catalog search result", err)
+			return
+		}
+		dishes = append(dishes, catalogDish(sourcePath, name))
+	}
+	if err := rows.Err(); err != nil {
+		writeInternalError(context, "finish Catalog search", err)
+		return
+	}
+
+	context.JSON(http.StatusOK, gin.H{"dishes": dishes})
 }
 
 func (a *App) getRecipe(context *gin.Context) {
@@ -80,7 +146,6 @@ func (a *App) getRecipe(context *gin.Context) {
 		Content: content,
 	})
 }
-
 
 func importCatalog(db *sql.DB, root string) error {
 	transaction, err := db.Begin()
