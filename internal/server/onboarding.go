@@ -63,6 +63,7 @@ type onboardingRateWindow struct {
 
 type onboardingInterview struct {
 	db      *sql.DB
+	pool    *candidatePool
 	nim     onboardingNIM
 	locksMu sync.Mutex
 	locks   map[int64]*sync.Mutex
@@ -70,9 +71,10 @@ type onboardingInterview struct {
 	rate    map[int64]onboardingRateWindow
 }
 
-func newOnboardingInterview(db *sql.DB, nim onboardingNIM) *onboardingInterview {
+func newOnboardingInterview(db *sql.DB, pool *candidatePool, nim onboardingNIM) *onboardingInterview {
 	return &onboardingInterview{
 		db:    db,
+		pool:  pool,
 		nim:   nim,
 		locks: make(map[int64]*sync.Mutex),
 		rate:  make(map[int64]onboardingRateWindow),
@@ -271,17 +273,12 @@ func (o *onboardingInterview) saveResult(
 			if math.IsNaN(weight) || math.IsInf(weight, 0) {
 				continue
 			}
-			weight = min(5, max(1, weight))
-			if _, err := transaction.ExecContext(
-				context,
-				`INSERT INTO candidate_pool (account_id, dish_id, preference_weight)
-				 VALUES (?, ?, ?)
-				 ON CONFLICT(account_id, dish_id) DO UPDATE SET
-					preference_weight = excluded.preference_weight`,
-				accountID,
-				dishID,
-				weight,
-			); err != nil {
+			weight = min(maxPreferenceWeight, max(1, weight))
+			err = o.pool.Admit(context, transaction, accountID, dishID, weight)
+			if errors.Is(err, errDishRejected) {
+				continue
+			}
+			if err != nil {
 				return err
 			}
 			mapped++

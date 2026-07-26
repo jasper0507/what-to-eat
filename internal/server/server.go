@@ -43,6 +43,7 @@ type App struct {
 	dummyPasswordHash []byte
 	loginFailures     map[string]loginFailureWindow
 	loginFailuresMu   sync.Mutex
+	candidatePool     *candidatePool
 	mealLifecycle     *mealLifecycle
 	onboarding        *onboardingInterview
 }
@@ -203,14 +204,16 @@ func newApp(
 		return nil, err
 	}
 
+	pool := newCandidatePool(db)
 	app := &App{
 		db:                db,
 		sessionSecret:     append([]byte(nil), config.SessionSecret...),
 		secureCookies:     config.SecureCookies,
 		dummyPasswordHash: dummyPasswordHash,
 		loginFailures:     make(map[string]loginFailureWindow),
-		mealLifecycle:     newMealLifecycle(db, decisionRandom, discovery),
-		onboarding:        newOnboardingInterview(db, nim),
+		candidatePool:     pool,
+		mealLifecycle:     newMealLifecycle(db, pool, decisionRandom, discovery),
+		onboarding:        newOnboardingInterview(db, pool, nim),
 	}
 	app.routes(config.WebDir)
 	return app, nil

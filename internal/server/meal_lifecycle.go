@@ -45,6 +45,7 @@ var (
 
 type mealLifecycle struct {
 	db        *sql.DB
+	pool      *candidatePool
 	random    *rand.Rand
 	randomMu  sync.Mutex
 	discovery DiscoveryConfig
@@ -100,10 +101,11 @@ func normalizeDiscoveryConfig(config *DiscoveryConfig) (DiscoveryConfig, error) 
 
 func newMealLifecycle(
 	db *sql.DB,
+	pool *candidatePool,
 	random *rand.Rand,
 	discovery DiscoveryConfig,
 ) *mealLifecycle {
-	return &mealLifecycle{db: db, random: random, discovery: discovery}
+	return &mealLifecycle{db: db, pool: pool, random: random, discovery: discovery}
 }
 
 type mealState struct {
@@ -1047,53 +1049,15 @@ func (m *mealLifecycle) Rate(
 	}
 
 	if weight, admitted := preferenceWeightForTasteRating(rating); admitted {
-		var rejected bool
-		if err := transaction.QueryRowContext(
-			context,
-			`SELECT EXISTS(
-				SELECT 1
-				FROM rejection_marks
-				WHERE account_id = ? AND dish_id = ?
-			 )`,
-			accountID,
-			dishID,
-		).Scan(&rejected); err != nil {
-			return tasteRatingResponse{}, err
-		}
-		if rejected {
+		err := m.pool.Admit(context, transaction, accountID, dishID, weight)
+		if errors.Is(err, errDishRejected) {
 			return tasteRatingResponse{}, errTasteRatingConflict
 		}
-		if _, err := transaction.ExecContext(
-			context,
-			`INSERT INTO candidate_pool (account_id, dish_id, preference_weight)
-			 VALUES (?, ?, ?)
-			 ON CONFLICT(account_id, dish_id)
-			 DO UPDATE SET preference_weight = excluded.preference_weight`,
-			accountID,
-			dishID,
-			weight,
-		); err != nil {
+		if err != nil {
 			return tasteRatingResponse{}, err
 		}
 	} else {
-		if _, err := transaction.ExecContext(
-			context,
-			"DELETE FROM candidate_pool WHERE account_id = ? AND dish_id = ?",
-			accountID,
-			dishID,
-		); err != nil {
-			return tasteRatingResponse{}, err
-		}
-		if _, err := transaction.ExecContext(
-			context,
-			`INSERT INTO rejection_marks (account_id, dish_id, rating, created_at)
-			 VALUES (?, ?, ?, unixepoch())
-			 ON CONFLICT(account_id, dish_id)
-			 DO UPDATE SET rating = excluded.rating, created_at = excluded.created_at`,
-			accountID,
-			dishID,
-			rating,
-		); err != nil {
+		if err := m.pool.Reject(context, transaction, accountID, dishID, rating); err != nil {
 			return tasteRatingResponse{}, err
 		}
 	}

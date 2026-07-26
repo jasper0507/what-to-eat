@@ -486,3 +486,89 @@ func TestNIMAPIKeyIsNotForwardedThroughRedirect(t *testing.T) {
 		t.Error("NIM client followed a redirect with a server-side API key")
 	}
 }
+
+func TestOnboardingSkipsRejectionMarkedDish(t *testing.T) {
+	app, err := server.NewWithScriptedNIMForTest(server.Config{
+		DatabasePath:  filepath.Join(t.TempDir(), "what-to-eat.db"),
+		SessionSecret: testSessionSecret,
+		CatalogDir:    filepath.Join("testdata", "catalog"),
+		Discovery: &server.DiscoveryConfig{
+			Enabled:               true,
+			MaxPoolSize:           1,
+			MaxEligibleDishes:     1,
+			MinRerolls:            2,
+			RequiredSignals:       2,
+			RecentMealWindow:      3,
+			MaxDiscoveriesPerMeal: 2,
+		},
+	}, []server.ScriptedNIMStep{
+		{Reply: "先聊聊你平常爱吃的具体菜名？"},
+		{Reply: "都记下了。", Complete: true, Preferences: map[string]float64{
+			"番茄豆腐": 4,
+			"番茄土豆": 4,
+			"柠檬水":  4,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { app.Close() })
+	cookie := registerCandidateEater(t, app, "onboarding_rejection_eater")
+
+	sendMessage := func(message string) *httptest.ResponseRecorder {
+		t.Helper()
+		response := candidatePoolRequest(
+			t,
+			app,
+			http.MethodPost,
+			"/api/onboarding/interview/messages",
+			`{"message":"`+message+`"}`,
+			cookie,
+		)
+		if response.Code != http.StatusOK {
+			t.Fatalf("interview message status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body)
+		}
+		return response
+	}
+	sendMessage("我随便吃点，你推荐吧")
+
+	addCandidatePoolDish(t, app, cookie, "vegetable_dish/番茄炒蛋.md", 5)
+	discovery := beginMealDecision(t, app, cookie)
+	if discovery.Mode != "discovery" {
+		t.Fatalf("Decision = %#v, want Discovery", discovery)
+	}
+	accepted := acceptDecisionResult(t, app, cookie, discovery)
+	if accepted.PendingRating == nil {
+		t.Fatal("Discovery Acceptance did not return a Pending rating")
+	}
+	ratePending(t, app, cookie, accepted.PendingRating.ID, 2)
+
+	completion := sendMessage("番茄豆腐、番茄土豆和柠檬水都可以")
+	var state struct {
+		Status string `json:"status"`
+	}
+	if err := json.NewDecoder(completion.Body).Decode(&state); err != nil {
+		t.Fatal(err)
+	}
+	if state.Status != "completed" {
+		t.Fatalf("interview status = %q, want completed with the rejected Dish skipped", state.Status)
+	}
+
+	list := candidatePoolRequest(t, app, http.MethodGet, "/api/candidate-pool/dishes", "", cookie)
+	var pool struct {
+		Dishes []candidateDish `json:"dishes"`
+	}
+	if err := json.NewDecoder(list.Body).Decode(&pool); err != nil {
+		t.Fatal(err)
+	}
+	poolIDs := make(map[string]bool, len(pool.Dishes))
+	for _, dish := range pool.Dishes {
+		poolIDs[dish.ID] = true
+	}
+	if poolIDs[discovery.Dish.ID] {
+		t.Errorf("Candidate pool %v regained rejection-marked Dish %q via Onboarding interview", poolIDs, discovery.Dish.ID)
+	}
+	if !poolIDs["drink/柠檬水.md"] {
+		t.Errorf("Candidate pool %v is missing admitted Dish 柠檬水", poolIDs)
+	}
+}

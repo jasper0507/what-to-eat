@@ -448,6 +448,57 @@ func TestResumeRequiresEachOfMultiplePendingRatings(t *testing.T) {
 	}
 }
 
+func TestExplicitAddRevokesRejectionMark(t *testing.T) {
+	app := openCatalogAppWithDiscovery(t, pendingRatingDiscoveryConfig(2), 5)
+	t.Cleanup(func() { app.Close() })
+	cookie := registerCandidateEater(t, app, "rejection_revoke_eater")
+	addCandidatePoolDish(t, app, cookie, "vegetable_dish/番茄炒蛋.md", 5)
+	discovery := beginMealDecision(t, app, cookie)
+	if discovery.Mode != "discovery" {
+		t.Fatalf("Decision = %#v, want Discovery", discovery)
+	}
+	accepted := acceptDecisionResult(t, app, cookie, discovery)
+	if accepted.PendingRating == nil {
+		t.Fatal("Discovery Acceptance did not return a Pending rating")
+	}
+	ratePending(t, app, cookie, accepted.PendingRating.ID, 2)
+	removeCandidatePoolDish(t, app, cookie, "vegetable_dish/番茄炒蛋.md")
+
+	resumeState := func() mealState {
+		t.Helper()
+		response := candidatePoolRequest(t, app, http.MethodGet, "/api/meals/resume", "", cookie)
+		if response.Code != http.StatusOK {
+			t.Fatalf("Resume status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body)
+		}
+		var state mealState
+		if err := json.NewDecoder(response.Body).Decode(&state); err != nil {
+			t.Fatal(err)
+		}
+		return state
+	}
+	if state := resumeState(); state.Status != "candidate_pool_empty" {
+		t.Fatalf("Resume after removing pool = %#v, want candidate_pool_empty", state)
+	}
+
+	addCandidatePoolDish(t, app, cookie, discovery.Dish.ID, 2)
+	if state := resumeState(); state.Status != "ready" {
+		t.Errorf("Resume after re-adding rejected Dish = %#v, want revoked Rejection mark to restore readiness", state)
+	}
+
+	list := candidatePoolRequest(t, app, http.MethodGet, "/api/candidate-pool/dishes", "", cookie)
+	var pool struct {
+		Dishes []candidateDish `json:"dishes"`
+	}
+	if err := json.NewDecoder(list.Body).Decode(&pool); err != nil {
+		t.Fatal(err)
+	}
+	if len(pool.Dishes) != 1 ||
+		pool.Dishes[0].ID != discovery.Dish.ID ||
+		pool.Dishes[0].PreferenceWeight != 2 {
+		t.Errorf("Candidate pool = %#v, want re-admitted Dish %q at weight 2", pool.Dishes, discovery.Dish.ID)
+	}
+}
+
 func acceptDecisionResult(
 	t *testing.T,
 	app http.Handler,
