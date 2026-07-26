@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Accepted；决定第 3 条（`internal/server` 保持单一扁平包）已被 ADR-0021 取代
 
 ## Context
 

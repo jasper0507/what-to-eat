@@ -4,10 +4,13 @@ import (
 	"context"
 	"errors"
 	"math/rand"
+
+	"github.com/jasper0507/what-to-eat/internal/meal"
+	"github.com/jasper0507/what-to-eat/internal/onboarding"
 )
 
 func NewWithDecisionRandomSeedForTest(config Config, seed int64) (*App, error) {
-	nim, err := newNIMAdapter(config.NIM)
+	nim, err := onboarding.NewNIMAdapter(config.NIM)
 	if err != nil {
 		return nil, err
 	}
@@ -29,10 +32,10 @@ type scriptedNIM struct {
 
 func (s *scriptedNIM) Respond(
 	callContext context.Context,
-	_ []onboardingMessage,
-) (nimInterviewResult, error) {
+	_ []onboarding.Message,
+) (onboarding.NIMResult, error) {
 	if len(s.steps) == 0 {
-		return nimInterviewResult{}, errors.New("scripted NIM has no response")
+		return onboarding.NIMResult{}, errors.New("scripted NIM has no response")
 	}
 	step := s.steps[0]
 	s.steps = s.steps[1:]
@@ -43,20 +46,20 @@ func (s *scriptedNIM) Respond(
 		select {
 		case <-step.Release:
 		case <-callContext.Done():
-			return nimInterviewResult{}, callContext.Err()
+			return onboarding.NIMResult{}, callContext.Err()
 		}
 	}
 	if step.Error != "" {
-		return nimInterviewResult{}, errors.New(step.Error)
+		return onboarding.NIMResult{}, errors.New(step.Error)
 	}
-	preferences := make([]nimPreference, 0, len(step.Preferences))
+	preferences := make([]onboarding.NIMPreference, 0, len(step.Preferences))
 	for dishName, weight := range step.Preferences {
-		preferences = append(preferences, nimPreference{
+		preferences = append(preferences, onboarding.NIMPreference{
 			DishName: dishName,
 			Weight:   weight,
 		})
 	}
-	return nimInterviewResult{
+	return onboarding.NIMResult{
 		Reply:       step.Reply,
 		Complete:    step.Complete,
 		Preferences: preferences,
@@ -67,5 +70,5 @@ func NewWithScriptedNIMForTest(
 	config Config,
 	steps []ScriptedNIMStep,
 ) (*App, error) {
-	return newApp(config, newDecisionRandom(), &scriptedNIM{steps: steps})
+	return newApp(config, meal.NewDecisionRandom(), &scriptedNIM{steps: steps})
 }

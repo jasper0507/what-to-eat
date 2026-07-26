@@ -6,6 +6,9 @@ import (
 	"context"
 	"errors"
 	"strings"
+
+	"github.com/jasper0507/what-to-eat/internal/meal"
+	"github.com/jasper0507/what-to-eat/internal/onboarding"
 )
 
 type ScriptedNIMRuleForTest struct {
@@ -22,8 +25,8 @@ type ruleNIM struct {
 
 func (s *ruleNIM) Respond(
 	_ context.Context,
-	messages []onboardingMessage,
-) (nimInterviewResult, error) {
+	messages []onboarding.Message,
+) (onboarding.NIMResult, error) {
 	var transcript strings.Builder
 	for _, message := range messages {
 		if message.Role == "user" {
@@ -36,27 +39,27 @@ func (s *ruleNIM) Respond(
 			continue
 		}
 		if rule.Error != "" {
-			return nimInterviewResult{}, errors.New(rule.Error)
+			return onboarding.NIMResult{}, errors.New(rule.Error)
 		}
-		preferences := make([]nimPreference, 0, len(rule.Preferences))
+		preferences := make([]onboarding.NIMPreference, 0, len(rule.Preferences))
 		for dishName, weight := range rule.Preferences {
-			preferences = append(preferences, nimPreference{
+			preferences = append(preferences, onboarding.NIMPreference{
 				DishName: dishName,
 				Weight:   weight,
 			})
 		}
-		return nimInterviewResult{
+		return onboarding.NIMResult{
 			Reply:       rule.Reply,
 			Complete:    rule.Complete,
 			Preferences: preferences,
 		}, nil
 	}
-	return nimInterviewResult{}, errors.New("scripted NIM has no matching rule")
+	return onboarding.NIMResult{}, errors.New("scripted NIM has no matching rule")
 }
 
 func NewWithScriptedNIMRulesForTest(
 	config Config,
 	rules []ScriptedNIMRuleForTest,
 ) (*App, error) {
-	return newApp(config, newDecisionRandom(), &ruleNIM{rules: rules})
+	return newApp(config, meal.NewDecisionRandom(), &ruleNIM{rules: rules})
 }

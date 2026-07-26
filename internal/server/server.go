@@ -1,3 +1,6 @@
+// Package server 是 HTTP adapter 与 composition root：装配各模块、注册
+// 路由、把模块结果与错误翻译成 wire 契约。领域规则住在
+// internal/{account,pool,meal,catalog,onboarding} 各模块包里。
 package server
 
 import (
@@ -14,7 +17,24 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+
+	"github.com/jasper0507/what-to-eat/internal/account"
+	"github.com/jasper0507/what-to-eat/internal/catalog"
+	"github.com/jasper0507/what-to-eat/internal/meal"
+	"github.com/jasper0507/what-to-eat/internal/onboarding"
+	"github.com/jasper0507/what-to-eat/internal/pool"
+	"github.com/jasper0507/what-to-eat/internal/schema"
 )
+
+// 模块配置以别名形式出现在公共 Config 上，调用方无需 import 模块包。
+type (
+	DiscoveryConfig = meal.DiscoveryConfig
+	NIMConfig       = onboarding.NIMConfig
+)
+
+func DefaultDiscoveryConfig() DiscoveryConfig {
+	return meal.DefaultDiscoveryConfig()
+}
 
 type Config struct {
 	DatabasePath  string
@@ -93,24 +113,25 @@ type App struct {
 	db            *sql.DB
 	router        *gin.Engine
 	secureCookies bool
-	sessions      *accountSessions
-	candidatePool *candidatePool
-	mealLifecycle *mealLifecycle
-	onboarding    *onboardingInterview
+	sessions      *account.Sessions
+	pool          *pool.Pool
+	catalog       *catalog.Catalog
+	meals         *meal.Lifecycle
+	onboarding    *onboarding.Interview
 }
 
 func New(config Config) (*App, error) {
-	nim, err := newNIMAdapter(config.NIM)
+	nim, err := onboarding.NewNIMAdapter(config.NIM)
 	if err != nil {
 		return nil, fmt.Errorf("configure NVIDIA NIM: %w", err)
 	}
-	return newApp(config, newDecisionRandom(), nim)
+	return newApp(config, meal.NewDecisionRandom(), nim)
 }
 
 func newApp(
 	config Config,
 	decisionRandom *mathrand.Rand,
-	nim onboardingNIM,
+	nim onboarding.NIM,
 ) (*App, error) {
 	if config.DatabasePath == "" {
 		return nil, errors.New("DatabasePath is required")
@@ -118,7 +139,7 @@ func newApp(
 	if len(config.SessionSecret) < 32 {
 		return nil, errors.New("SessionSecret must contain at least 32 bytes")
 	}
-	discovery, err := normalizeDiscoveryConfig(config.Discovery)
+	discovery, err := meal.NormalizeDiscoveryConfig(config.Discovery)
 	if err != nil {
 		return nil, fmt.Errorf("configure Discovery: %w", err)
 	}
@@ -128,31 +149,32 @@ func newApp(
 	}
 	db.SetMaxOpenConns(1)
 
-	if err := migrateSchema(db); err != nil {
+	if err := schema.Migrate(db); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("initialize SQLite database %q: %w", config.DatabasePath, err)
 	}
 	if config.CatalogDir != "" {
-		if err := importCatalog(db, config.CatalogDir); err != nil {
+		if err := catalog.Import(db, config.CatalogDir); err != nil {
 			db.Close()
 			return nil, fmt.Errorf("import Catalog: %w", err)
 		}
 	}
 
-	sessions, err := newAccountSessions(db, config.SessionSecret, time.Now)
+	sessions, err := account.NewSessions(db, config.SessionSecret, time.Now)
 	if err != nil {
 		db.Close()
 		return nil, err
 	}
 
-	pool := newCandidatePool(db)
+	candidates := pool.New(db)
 	app := &App{
 		db:            db,
 		secureCookies: config.SecureCookies,
 		sessions:      sessions,
-		candidatePool: pool,
-		mealLifecycle: newMealLifecycle(db, pool, decisionRandom, discovery),
-		onboarding:    newOnboardingInterview(db, pool, nim),
+		pool:          candidates,
+		catalog:       catalog.New(db),
+		meals:         meal.New(db, candidates, decisionRandom, discovery),
+		onboarding:    onboarding.NewInterview(db, candidates, nim),
 	}
 	app.routes(config.WebDir)
 	return app, nil

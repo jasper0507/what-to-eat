@@ -1,4 +1,4 @@
-package server
+package schema
 
 import (
 	"database/sql"
@@ -7,9 +7,9 @@ import (
 	"strings"
 )
 
-// schemaMigrations 是唯一的、按序执行的 schema 台账：任何一张表长什么样，
-// 读本文件即可回答。新迁移追加到列表末尾。
-var schemaMigrations = []struct {
+// migrations 是唯一的、按序执行的 schema 台账。
+// 新迁移追加到列表末尾。
+var migrations = []struct {
 	name  string
 	apply func(*sql.DB) error
 }{
@@ -20,8 +20,9 @@ var schemaMigrations = []struct {
 	{"Pending rating", migratePendingRatingSchema},
 }
 
-func migrateSchema(db *sql.DB) error {
-	for _, migration := range schemaMigrations {
+// Migrate 按序执行 schema 台账；任何一张表长什么样，读本文件即可回答。
+func Migrate(db *sql.DB) error {
+	for _, migration := range migrations {
 		if err := migration.apply(db); err != nil {
 			return fmt.Errorf("migrate %s: %w", migration.name, err)
 		}

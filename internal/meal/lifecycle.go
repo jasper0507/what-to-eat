@@ -1,28 +1,31 @@
-package server
+// Package meal 是 ADR-0019 的 Meal lifecycle 深模块：Decision、Reroll、
+// Acceptance、anti-repeat、Discovery、Pending rating、Taste rating 与
+// 评分驱动的 pool admission/rejection 全部藏在 Resume/Begin/Reroll/
+// Accept/Rate 五个行为之后。
+package meal
 
 import (
 	"context"
 	"database/sql"
 	"errors"
 	"math/rand"
-	"net/http"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/gin-gonic/gin"
+	"github.com/jasper0507/what-to-eat/internal/catalog"
+	"github.com/jasper0507/what-to-eat/internal/pool"
 )
 
 const (
-	mealStatusCandidatePoolEmpty mealStatus   = "candidate_pool_empty"
-	mealStatusReady              mealStatus   = "ready"
-	mealStatusActiveDecision     mealStatus   = "active_decision"
-	mealStatusPendingRatings     mealStatus   = "pending_ratings"
-	decisionModePool             decisionMode = "pool"
-	decisionModeDiscovery        decisionMode = "discovery"
-	defaultCooldown                           = 2
-	defaultRecencyWindow                      = 7
+	StatusCandidatePoolEmpty Status = "candidate_pool_empty"
+	StatusReady              Status = "ready"
+	StatusActiveDecision     Status = "active_decision"
+	StatusPendingRatings     Status = "pending_ratings"
+	ModePool                 Mode   = "pool"
+	ModeDiscovery            Mode   = "discovery"
+	defaultCooldown                 = 2
+	defaultRecencyWindow            = 7
 )
 
 const activeDecisionQuery = `
@@ -36,23 +39,23 @@ const activeDecisionQuery = `
 `
 
 var (
-	errCandidatePoolEmpty    = errors.New("Candidate pool is empty")
-	errDecisionNotFound      = errors.New("Decision not found")
-	errPendingRatingNotFound = errors.New("Pending rating not found")
-	errPendingRatings        = errors.New("Pending ratings must be resolved")
-	errTasteRatingConflict   = errors.New("Taste rating conflicts with the resolved rating")
+	ErrCandidatePoolEmpty    = errors.New("Candidate pool is empty")
+	ErrDecisionNotFound      = errors.New("Decision not found")
+	ErrPendingRatingNotFound = errors.New("Pending rating not found")
+	ErrPendingRatings        = errors.New("Pending ratings must be resolved")
+	ErrTasteRatingConflict   = errors.New("Taste rating conflicts with the resolved rating")
 )
 
-type mealLifecycle struct {
+type Lifecycle struct {
 	db        *sql.DB
-	pool      *candidatePool
+	pool      *pool.Pool
 	random    *rand.Rand
 	randomMu  sync.Mutex
 	discovery DiscoveryConfig
 }
 
-type mealStatus string
-type decisionMode string
+type Status string
+type Mode string
 
 type DiscoveryConfig struct {
 	Enabled               bool
@@ -64,7 +67,7 @@ type DiscoveryConfig struct {
 	MaxDiscoveriesPerMeal int
 }
 
-func newDecisionRandom() *rand.Rand {
+func NewDecisionRandom() *rand.Rand {
 	return rand.New(rand.NewSource(time.Now().UnixNano()))
 }
 
@@ -80,7 +83,7 @@ func DefaultDiscoveryConfig() DiscoveryConfig {
 	}
 }
 
-func normalizeDiscoveryConfig(config *DiscoveryConfig) (DiscoveryConfig, error) {
+func NormalizeDiscoveryConfig(config *DiscoveryConfig) (DiscoveryConfig, error) {
 	if config == nil {
 		return DefaultDiscoveryConfig(), nil
 	}
@@ -99,30 +102,30 @@ func normalizeDiscoveryConfig(config *DiscoveryConfig) (DiscoveryConfig, error) 
 	return *config, nil
 }
 
-func newMealLifecycle(
+func New(
 	db *sql.DB,
-	pool *candidatePool,
+	candidates *pool.Pool,
 	random *rand.Rand,
 	discovery DiscoveryConfig,
-) *mealLifecycle {
-	return &mealLifecycle{db: db, pool: pool, random: random, discovery: discovery}
+) *Lifecycle {
+	return &Lifecycle{db: db, pool: candidates, random: random, discovery: discovery}
 }
 
-type mealState struct {
-	Status         mealStatus              `json:"status"`
-	Decision       *mealDecisionResponse   `json:"decision,omitempty"`
-	PendingRatings []pendingRatingResponse `json:"pending_ratings,omitempty"`
+type State struct {
+	Status         Status          `json:"status"`
+	Decision       *Decision       `json:"decision,omitempty"`
+	PendingRatings []PendingRating `json:"pending_ratings,omitempty"`
 }
 
-type mealDecisionResponse struct {
-	ID     int64               `json:"id"`
-	MealID int64               `json:"meal_id"`
-	Mode   decisionMode        `json:"mode"`
-	Reason string              `json:"reason,omitempty"`
-	Dish   catalogDishResponse `json:"dish"`
+type Decision struct {
+	ID     int64        `json:"id"`
+	MealID int64        `json:"meal_id"`
+	Mode   Mode         `json:"mode"`
+	Reason string       `json:"reason,omitempty"`
+	Dish   catalog.Dish `json:"dish"`
 }
 
-type eatingRecordResponse struct {
+type EatingRecord struct {
 	Sequence int64 `json:"sequence"`
 }
 
@@ -143,41 +146,37 @@ type poolSnapshot struct {
 
 type decisionChoice struct {
 	dish   weightedDish
-	mode   decisionMode
+	mode   Mode
 	reason string
 }
 
-type recipeReferenceResponse struct {
-	Dish catalogDishResponse `json:"dish"`
+type RecipeRef struct {
+	Dish catalog.Dish `json:"dish"`
 }
 
-type acceptanceResponse struct {
-	EatingRecord  eatingRecordResponse    `json:"eating_record"`
-	Recipe        recipeReferenceResponse `json:"recipe"`
-	PendingRating *pendingRatingResponse  `json:"pending_rating,omitempty"`
+type Acceptance struct {
+	EatingRecord  EatingRecord   `json:"eating_record"`
+	Recipe        RecipeRef      `json:"recipe"`
+	PendingRating *PendingRating `json:"pending_rating,omitempty"`
 }
 
-type pendingRatingResponse struct {
-	ID     int64               `json:"id"`
-	MealID int64               `json:"meal_id"`
-	MealAt int64               `json:"meal_at"`
-	Dish   catalogDishResponse `json:"dish"`
+type PendingRating struct {
+	ID     int64        `json:"id"`
+	MealID int64        `json:"meal_id"`
+	MealAt int64        `json:"meal_at"`
+	Dish   catalog.Dish `json:"dish"`
 }
 
-type tasteRatingResponse struct {
-	PendingRatingID  int64               `json:"pending_rating_id"`
-	Rating           int                 `json:"rating"`
-	Outcome          string              `json:"outcome"`
-	PreferenceWeight *float64            `json:"preference_weight,omitempty"`
-	Dish             catalogDishResponse `json:"dish"`
+type TasteRating struct {
+	PendingRatingID  int64        `json:"pending_rating_id"`
+	Rating           int          `json:"rating"`
+	Outcome          string       `json:"outcome"`
+	PreferenceWeight *float64     `json:"preference_weight,omitempty"`
+	Dish             catalog.Dish `json:"dish"`
 }
 
-type tasteRatingInput struct {
-	Rating int `json:"rating"`
-}
-
-func scanActiveDecision(row *sql.Row) (mealState, error) {
-	var decision mealDecisionResponse
+func scanActiveDecision(row *sql.Row) (State, error) {
+	var decision Decision
 	var mode, dishID, dishName string
 	err := row.Scan(
 		&decision.ID,
@@ -188,21 +187,21 @@ func scanActiveDecision(row *sql.Row) (mealState, error) {
 		&dishName,
 	)
 	if err == nil {
-		decision.Mode = decisionMode(mode)
-		decision.Dish = catalogDish(dishID, dishName)
-		return mealState{Status: mealStatusActiveDecision, Decision: &decision}, nil
+		decision.Mode = Mode(mode)
+		decision.Dish = catalog.NewDish(dishID, dishName)
+		return State{Status: StatusActiveDecision, Decision: &decision}, nil
 	}
-	return mealState{}, err
+	return State{}, err
 }
 
-func (m *mealLifecycle) Resume(context context.Context, accountID int64) (mealState, error) {
+func (m *Lifecycle) Resume(context context.Context, accountID int64) (State, error) {
 	pendingRatings, err := m.unresolvedPendingRatings(context, m.db, accountID)
 	if err != nil {
-		return mealState{}, err
+		return State{}, err
 	}
 	if len(pendingRatings) > 0 {
-		return mealState{
-			Status:         mealStatusPendingRatings,
+		return State{
+			Status:         StatusPendingRatings,
 			PendingRatings: pendingRatings,
 		}, nil
 	}
@@ -214,7 +213,7 @@ func (m *mealLifecycle) Resume(context context.Context, accountID int64) (mealSt
 		return activeDecision, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
-		return mealState{}, err
+		return State{}, err
 	}
 
 	var hasCandidates bool
@@ -233,12 +232,12 @@ func (m *mealLifecycle) Resume(context context.Context, accountID int64) (mealSt
 		 )`,
 		accountID,
 	).Scan(&hasCandidates); err != nil {
-		return mealState{}, err
+		return State{}, err
 	}
 	if !hasCandidates {
-		return mealState{Status: mealStatusCandidatePoolEmpty}, nil
+		return State{Status: StatusCandidatePoolEmpty}, nil
 	}
-	return mealState{Status: mealStatusReady}, nil
+	return State{Status: StatusReady}, nil
 }
 
 // sqlQueryer 让同一读取逻辑既可跑在 *sql.DB 上也可跑在事务内。
@@ -246,11 +245,11 @@ type sqlQueryer interface {
 	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
 }
 
-func (m *mealLifecycle) unresolvedPendingRatings(
+func (m *Lifecycle) unresolvedPendingRatings(
 	context context.Context,
 	queryer sqlQueryer,
 	accountID int64,
-) ([]pendingRatingResponse, error) {
+) ([]PendingRating, error) {
 	rows, err := queryer.QueryContext(
 		context,
 		`SELECT pending_ratings.id, pending_ratings.meal_id, pending_ratings.meal_at,
@@ -266,9 +265,9 @@ func (m *mealLifecycle) unresolvedPendingRatings(
 	}
 	defer rows.Close()
 
-	pendingRatings := make([]pendingRatingResponse, 0)
+	pendingRatings := make([]PendingRating, 0)
 	for rows.Next() {
-		var pending pendingRatingResponse
+		var pending PendingRating
 		var dishID, dishName string
 		if err := rows.Scan(
 			&pending.ID,
@@ -279,7 +278,7 @@ func (m *mealLifecycle) unresolvedPendingRatings(
 		); err != nil {
 			return nil, err
 		}
-		pending.Dish = catalogDish(dishID, dishName)
+		pending.Dish = catalog.NewDish(dishID, dishName)
 		pendingRatings = append(pendingRatings, pending)
 	}
 	return pendingRatings, rows.Err()
@@ -289,8 +288,8 @@ func pendingRatingForDecision(
 	context context.Context,
 	transaction *sql.Tx,
 	accountID, decisionID int64,
-) (*pendingRatingResponse, error) {
-	var pending pendingRatingResponse
+) (*PendingRating, error) {
+	var pending PendingRating
 	var dishID, dishName string
 	err := transaction.QueryRowContext(
 		context,
@@ -314,11 +313,11 @@ func pendingRatingForDecision(
 	if err != nil {
 		return nil, err
 	}
-	pending.Dish = catalogDish(dishID, dishName)
+	pending.Dish = catalog.NewDish(dishID, dishName)
 	return &pending, nil
 }
 
-func (m *mealLifecycle) poolCandidates(
+func (m *Lifecycle) poolCandidates(
 	context context.Context,
 	transaction *sql.Tx,
 	accountID int64,
@@ -473,7 +472,7 @@ func topWeightDishes(candidates []weightedDish) []weightedDish {
 	return top
 }
 
-func (m *mealLifecycle) recentRerolls(
+func (m *Lifecycle) recentRerolls(
 	context context.Context,
 	transaction *sql.Tx,
 	accountID int64,
@@ -523,7 +522,7 @@ func mealShownCounts(
 		}
 		shown[dishID]++
 		decisionCount++
-		if mode == string(decisionModeDiscovery) {
+		if mode == string(ModeDiscovery) {
 			discoveryCount++
 		}
 	}
@@ -533,7 +532,7 @@ func mealShownCounts(
 	return shown, decisionCount, discoveryCount, rows.Err()
 }
 
-func (m *mealLifecycle) discoveryPressure(
+func (m *Lifecycle) discoveryPressure(
 	pool poolSnapshot,
 	rerolls int,
 ) (bool, string) {
@@ -556,7 +555,7 @@ func (m *mealLifecycle) discoveryPressure(
 	return true, strings.Join(reasons, "，") + "，试试相似的新菜。"
 }
 
-func (m *mealLifecycle) discoveryDish(
+func (m *Lifecycle) discoveryDish(
 	context context.Context,
 	transaction *sql.Tx,
 	accountID int64,
@@ -626,7 +625,7 @@ type selectionInput struct {
 
 // chooseDecision 决定本次 Decision 走 pool 还是 Discovery，并只为选中的
 // 路径消耗随机抽样。
-func (m *mealLifecycle) chooseDecision(
+func (m *Lifecycle) chooseDecision(
 	context context.Context,
 	transaction *sql.Tx,
 	accountID int64,
@@ -647,30 +646,30 @@ func (m *mealLifecycle) chooseDecision(
 		if found {
 			return decisionChoice{
 				dish:   discovery,
-				mode:   decisionModeDiscovery,
+				mode:   ModeDiscovery,
 				reason: reason,
 			}, nil
 		}
 	}
 	return decisionChoice{
 		dish: m.chooseWeightedDish(input.poolChoices),
-		mode: decisionModePool,
+		mode: ModePool,
 	}, nil
 }
 
 func dishSimilarity(candidate, reference weightedDish) float64 {
-	candidateTaxonomy := sourcePathTaxonomy(candidate.id)
-	referenceTaxonomy := sourcePathTaxonomy(reference.id)
+	candidateTaxonomy := catalog.PathTaxonomy(candidate.id)
+	referenceTaxonomy := catalog.PathTaxonomy(reference.id)
 	score := 0.0
-	if candidateTaxonomy.category != "" &&
-		candidateTaxonomy.category == referenceTaxonomy.category {
+	if candidateTaxonomy.Category != "" &&
+		candidateTaxonomy.Category == referenceTaxonomy.Category {
 		score += 4
 	}
 	referenceTags := make(map[string]bool)
-	for _, tag := range referenceTaxonomy.tags {
+	for _, tag := range referenceTaxonomy.Tags {
 		referenceTags[tag] = true
 	}
-	for _, tag := range candidateTaxonomy.tags {
+	for _, tag := range candidateTaxonomy.Tags {
 		if referenceTags[tag] {
 			score += 2
 		}
@@ -693,7 +692,7 @@ func nameBigrams(name string) map[string]bool {
 	return keywords
 }
 
-func (m *mealLifecycle) chooseWeightedDish(candidates []weightedDish) weightedDish {
+func (m *Lifecycle) chooseWeightedDish(candidates []weightedDish) weightedDish {
 	totalWeight := 0.0
 	for _, candidate := range candidates {
 		totalWeight += candidate.weight
@@ -711,22 +710,22 @@ func (m *mealLifecycle) chooseWeightedDish(candidates []weightedDish) weightedDi
 	return selected
 }
 
-func (m *mealLifecycle) Begin(context context.Context, accountID int64) (state mealState, created bool, err error) {
+func (m *Lifecycle) Begin(context context.Context, accountID int64) (state State, created bool, err error) {
 	transaction, err := m.db.BeginTx(context, nil)
 	if err != nil {
-		return mealState{}, false, err
+		return State{}, false, err
 	}
 	defer transaction.Rollback()
 
 	pendingRatings, err := m.unresolvedPendingRatings(context, transaction, accountID)
 	if err != nil {
-		return mealState{}, false, err
+		return State{}, false, err
 	}
 	if len(pendingRatings) > 0 {
-		return mealState{
-			Status:         mealStatusPendingRatings,
+		return State{
+			Status:         StatusPendingRatings,
 			PendingRatings: pendingRatings,
-		}, false, errPendingRatings
+		}, false, ErrPendingRatings
 	}
 
 	activeDecision, err := scanActiveDecision(
@@ -736,19 +735,19 @@ func (m *mealLifecycle) Begin(context context.Context, accountID int64) (state m
 		return activeDecision, false, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
-		return mealState{}, false, err
+		return State{}, false, err
 	}
 
 	pool, err := m.poolCandidates(context, transaction, accountID)
 	if err != nil {
-		return mealState{}, false, err
+		return State{}, false, err
 	}
 	if len(pool.selectable) == 0 {
-		return mealState{Status: mealStatusCandidatePoolEmpty}, false, errCandidatePoolEmpty
+		return State{Status: StatusCandidatePoolEmpty}, false, ErrCandidatePoolEmpty
 	}
 	recentRerolls, err := m.recentRerolls(context, transaction, accountID)
 	if err != nil {
-		return mealState{}, false, err
+		return State{}, false, err
 	}
 	choice, err := m.chooseDecision(context, transaction, accountID, selectionInput{
 		pool:        pool,
@@ -756,7 +755,7 @@ func (m *mealLifecycle) Begin(context context.Context, accountID int64) (state m
 		rerolls:     recentRerolls,
 	})
 	if err != nil {
-		return mealState{}, false, err
+		return State{}, false, err
 	}
 
 	mealResult, err := transaction.ExecContext(
@@ -765,12 +764,12 @@ func (m *mealLifecycle) Begin(context context.Context, accountID int64) (state m
 		accountID,
 	)
 	if err != nil {
-		return mealState{}, false, err
+		return State{}, false, err
 	}
-	var decision mealDecisionResponse
+	var decision Decision
 	decision.MealID, err = mealResult.LastInsertId()
 	if err != nil {
-		return mealState{}, false, err
+		return State{}, false, err
 	}
 	decisionResult, err := transaction.ExecContext(
 		context,
@@ -782,28 +781,28 @@ func (m *mealLifecycle) Begin(context context.Context, accountID int64) (state m
 		choice.reason,
 	)
 	if err != nil {
-		return mealState{}, false, err
+		return State{}, false, err
 	}
 	decision.ID, err = decisionResult.LastInsertId()
 	if err != nil {
-		return mealState{}, false, err
+		return State{}, false, err
 	}
 	decision.Mode = choice.mode
 	decision.Reason = choice.reason
-	decision.Dish = catalogDish(choice.dish.id, choice.dish.name)
+	decision.Dish = catalog.NewDish(choice.dish.id, choice.dish.name)
 	if err := transaction.Commit(); err != nil {
-		return mealState{}, false, err
+		return State{}, false, err
 	}
-	return mealState{Status: mealStatusActiveDecision, Decision: &decision}, true, nil
+	return State{Status: StatusActiveDecision, Decision: &decision}, true, nil
 }
 
-func (m *mealLifecycle) Reroll(
+func (m *Lifecycle) Reroll(
 	context context.Context,
 	accountID, decisionID int64,
-) (mealState, error) {
+) (State, error) {
 	transaction, err := m.db.BeginTx(context, nil)
 	if err != nil {
-		return mealState{}, err
+		return State{}, err
 	}
 	defer transaction.Rollback()
 
@@ -821,10 +820,10 @@ func (m *mealLifecycle) Reroll(
 		accountID,
 	).Scan(&mealID, &mealStatus, &decisionStatus, &currentDishID, &replacementID)
 	if errors.Is(err, sql.ErrNoRows) {
-		return mealState{}, errDecisionNotFound
+		return State{}, ErrDecisionNotFound
 	}
 	if err != nil {
-		return mealState{}, err
+		return State{}, err
 	}
 	if replacementID.Valid {
 		replacement, err := scanActiveDecision(transaction.QueryRowContext(
@@ -834,25 +833,25 @@ func (m *mealLifecycle) Reroll(
 			replacementID.Int64,
 		))
 		if errors.Is(err, sql.ErrNoRows) {
-			return mealState{}, errDecisionNotFound
+			return State{}, ErrDecisionNotFound
 		}
 		return replacement, err
 	}
 	if mealStatus != "active" || decisionStatus != "active" {
-		return mealState{}, errDecisionNotFound
+		return State{}, ErrDecisionNotFound
 	}
 
 	pool, err := m.poolCandidates(context, transaction, accountID)
 	if err != nil {
-		return mealState{}, err
+		return State{}, err
 	}
 	if len(pool.selectable) == 0 {
-		return mealState{Status: mealStatusCandidatePoolEmpty}, errCandidatePoolEmpty
+		return State{Status: StatusCandidatePoolEmpty}, ErrCandidatePoolEmpty
 	}
 
 	shown, decisionCount, discoveryCount, err := mealShownCounts(context, transaction, mealID)
 	if err != nil {
-		return mealState{}, err
+		return State{}, err
 	}
 
 	poolChoices := pool.selectable
@@ -867,7 +866,7 @@ func (m *mealLifecycle) Reroll(
 	}
 	recentRerolls, err := m.recentRerolls(context, transaction, accountID)
 	if err != nil {
-		return mealState{}, err
+		return State{}, err
 	}
 	completedRerolls := max(0, decisionCount-1)
 	rerollsIncludingCurrentRequest := completedRerolls + 1
@@ -879,7 +878,7 @@ func (m *mealLifecycle) Reroll(
 		shown:          shown,
 	})
 	if err != nil {
-		return mealState{}, err
+		return State{}, err
 	}
 
 	if _, err := transaction.ExecContext(
@@ -887,7 +886,7 @@ func (m *mealLifecycle) Reroll(
 		"UPDATE decisions SET rerolled_to_id = id WHERE id = ? AND rerolled_to_id IS NULL",
 		decisionID,
 	); err != nil {
-		return mealState{}, err
+		return State{}, err
 	}
 	result, err := transaction.ExecContext(
 		context,
@@ -899,11 +898,11 @@ func (m *mealLifecycle) Reroll(
 		choice.reason,
 	)
 	if err != nil {
-		return mealState{}, err
+		return State{}, err
 	}
 	newDecisionID, err := result.LastInsertId()
 	if err != nil {
-		return mealState{}, err
+		return State{}, err
 	}
 	if _, err := transaction.ExecContext(
 		context,
@@ -911,29 +910,29 @@ func (m *mealLifecycle) Reroll(
 		newDecisionID,
 		decisionID,
 	); err != nil {
-		return mealState{}, err
+		return State{}, err
 	}
 	if err := transaction.Commit(); err != nil {
-		return mealState{}, err
+		return State{}, err
 	}
 
-	replacement := mealDecisionResponse{
+	replacement := Decision{
 		ID:     newDecisionID,
 		MealID: mealID,
 		Mode:   choice.mode,
 		Reason: choice.reason,
-		Dish:   catalogDish(choice.dish.id, choice.dish.name),
+		Dish:   catalog.NewDish(choice.dish.id, choice.dish.name),
 	}
-	return mealState{Status: mealStatusActiveDecision, Decision: &replacement}, nil
+	return State{Status: StatusActiveDecision, Decision: &replacement}, nil
 }
 
-func (m *mealLifecycle) Accept(
+func (m *Lifecycle) Accept(
 	context context.Context,
 	accountID, decisionID int64,
-) (acceptanceResponse, error) {
+) (Acceptance, error) {
 	transaction, err := m.db.BeginTx(context, nil)
 	if err != nil {
-		return acceptanceResponse{}, err
+		return Acceptance{}, err
 	}
 	defer transaction.Rollback()
 
@@ -953,19 +952,19 @@ func (m *mealLifecycle) Accept(
 		accountID,
 	).Scan(&mealID, &status, &mode, &dishID, &dishName, &existingSequence, &rerolledToID)
 	if errors.Is(err, sql.ErrNoRows) {
-		return acceptanceResponse{}, errDecisionNotFound
+		return Acceptance{}, ErrDecisionNotFound
 	}
 	if err != nil {
-		return acceptanceResponse{}, err
+		return Acceptance{}, err
 	}
 
-	result := acceptanceResponse{
-		Recipe: recipeReferenceResponse{
-			Dish: catalogDish(dishID, dishName),
+	result := Acceptance{
+		Recipe: RecipeRef{
+			Dish: catalog.NewDish(dishID, dishName),
 		},
 	}
 	if rerolledToID.Valid {
-		return acceptanceResponse{}, errDecisionNotFound
+		return Acceptance{}, ErrDecisionNotFound
 	}
 	if status == "accepted" && existingSequence.Valid {
 		result.EatingRecord.Sequence = existingSequence.Int64
@@ -976,12 +975,12 @@ func (m *mealLifecycle) Accept(
 			decisionID,
 		)
 		if err != nil {
-			return acceptanceResponse{}, err
+			return Acceptance{}, err
 		}
 		return result, nil
 	}
 	if status != "active" {
-		return acceptanceResponse{}, errDecisionNotFound
+		return Acceptance{}, ErrDecisionNotFound
 	}
 
 	if err := transaction.QueryRowContext(
@@ -989,7 +988,7 @@ func (m *mealLifecycle) Accept(
 		"SELECT COALESCE(MAX(sequence), 0) + 1 FROM eating_records WHERE account_id = ?",
 		accountID,
 	).Scan(&result.EatingRecord.Sequence); err != nil {
-		return acceptanceResponse{}, err
+		return Acceptance{}, err
 	}
 	if _, err := transaction.ExecContext(
 		context,
@@ -1002,23 +1001,23 @@ func (m *mealLifecycle) Accept(
 		decisionID,
 		dishID,
 	); err != nil {
-		return acceptanceResponse{}, err
+		return Acceptance{}, err
 	}
 	if _, err := transaction.ExecContext(
 		context,
 		"UPDATE decisions SET status = 'accepted' WHERE id = ? AND status = 'active'",
 		decisionID,
 	); err != nil {
-		return acceptanceResponse{}, err
+		return Acceptance{}, err
 	}
 	if _, err := transaction.ExecContext(
 		context,
 		"UPDATE meals SET status = 'accepted' WHERE id = ? AND status = 'active'",
 		mealID,
 	); err != nil {
-		return acceptanceResponse{}, err
+		return Acceptance{}, err
 	}
-	if mode == string(decisionModeDiscovery) {
+	if mode == string(ModeDiscovery) {
 		if _, err := transaction.ExecContext(
 			context,
 			`INSERT INTO pending_ratings (
@@ -1029,7 +1028,7 @@ func (m *mealLifecycle) Accept(
 			 WHERE decision_id = ?`,
 			decisionID,
 		); err != nil {
-			return acceptanceResponse{}, err
+			return Acceptance{}, err
 		}
 		result.PendingRating, err = pendingRatingForDecision(
 			context,
@@ -1038,23 +1037,23 @@ func (m *mealLifecycle) Accept(
 			decisionID,
 		)
 		if err != nil {
-			return acceptanceResponse{}, err
+			return Acceptance{}, err
 		}
 	}
 	if err := transaction.Commit(); err != nil {
-		return acceptanceResponse{}, err
+		return Acceptance{}, err
 	}
 	return result, nil
 }
 
-func (m *mealLifecycle) Rate(
+func (m *Lifecycle) Rate(
 	context context.Context,
 	accountID, pendingRatingID int64,
 	rating int,
-) (tasteRatingResponse, error) {
+) (TasteRating, error) {
 	transaction, err := m.db.BeginTx(context, nil)
 	if err != nil {
-		return tasteRatingResponse{}, err
+		return TasteRating{}, err
 	}
 	defer transaction.Rollback()
 
@@ -1070,29 +1069,29 @@ func (m *mealLifecycle) Rate(
 		accountID,
 	).Scan(&existingRating, &dishID, &dishName)
 	if errors.Is(err, sql.ErrNoRows) {
-		return tasteRatingResponse{}, errPendingRatingNotFound
+		return TasteRating{}, ErrPendingRatingNotFound
 	}
 	if err != nil {
-		return tasteRatingResponse{}, err
+		return TasteRating{}, err
 	}
 	if existingRating.Valid {
 		if int(existingRating.Int64) != rating {
-			return tasteRatingResponse{}, errTasteRatingConflict
+			return TasteRating{}, ErrTasteRatingConflict
 		}
-		return newTasteRatingResponse(pendingRatingID, rating, dishID, dishName), nil
+		return newTasteRating(pendingRatingID, rating, dishID, dishName), nil
 	}
 
 	if weight, admitted := preferenceWeightForTasteRating(rating); admitted {
 		err := m.pool.Admit(context, transaction, accountID, dishID, weight)
-		if errors.Is(err, errDishRejected) {
-			return tasteRatingResponse{}, errTasteRatingConflict
+		if errors.Is(err, pool.ErrDishRejected) {
+			return TasteRating{}, ErrTasteRatingConflict
 		}
 		if err != nil {
-			return tasteRatingResponse{}, err
+			return TasteRating{}, err
 		}
 	} else {
 		if err := m.pool.Reject(context, transaction, accountID, dishID, rating); err != nil {
-			return tasteRatingResponse{}, err
+			return TasteRating{}, err
 		}
 	}
 	if _, err := transaction.ExecContext(
@@ -1104,24 +1103,24 @@ func (m *mealLifecycle) Rate(
 		pendingRatingID,
 		accountID,
 	); err != nil {
-		return tasteRatingResponse{}, err
+		return TasteRating{}, err
 	}
 	if err := transaction.Commit(); err != nil {
-		return tasteRatingResponse{}, err
+		return TasteRating{}, err
 	}
-	return newTasteRatingResponse(pendingRatingID, rating, dishID, dishName), nil
+	return newTasteRating(pendingRatingID, rating, dishID, dishName), nil
 }
 
-func newTasteRatingResponse(
+func newTasteRating(
 	pendingRatingID int64,
 	rating int,
 	dishID, dishName string,
-) tasteRatingResponse {
-	result := tasteRatingResponse{
+) TasteRating {
+	result := TasteRating{
 		PendingRatingID: pendingRatingID,
 		Rating:          rating,
 		Outcome:         "rejection_mark",
-		Dish:            catalogDish(dishID, dishName),
+		Dish:            catalog.NewDish(dishID, dishName),
 	}
 	if weight, admitted := preferenceWeightForTasteRating(rating); admitted {
 		result.Outcome = "pool_admission"
@@ -1140,112 +1139,5 @@ func preferenceWeightForTasteRating(rating int) (float64, bool) {
 		return 1.3, true
 	default:
 		return 0, false
-	}
-}
-
-func (a *App) resumeMeal(context *gin.Context) {
-	account := sessionAccount(context)
-	state, err := a.mealLifecycle.Resume(context, account.ID)
-	if err != nil {
-		writeInternalError(context, "resume Meal lifecycle", err)
-		return
-	}
-	context.JSON(http.StatusOK, state)
-}
-
-func (a *App) beginMeal(context *gin.Context) {
-	account := sessionAccount(context)
-	state, created, err := a.mealLifecycle.Begin(context, account.ID)
-	switch {
-	case errors.Is(err, errPendingRatings):
-		writeError(
-			context,
-			http.StatusConflict,
-			codePendingRatings,
-			"请先解决所有 Pending rating，再开始新的 Decision",
-		)
-	case errors.Is(err, errCandidatePoolEmpty):
-		writeError(
-			context,
-			http.StatusConflict,
-			codeCandidatePoolEmpty,
-			"Candidate pool 为空，无法创建 Decision",
-		)
-	case err != nil:
-		writeInternalError(context, "begin Meal lifecycle", err)
-	default:
-		status := http.StatusOK
-		if created {
-			status = http.StatusCreated
-		}
-		context.JSON(status, state)
-	}
-}
-
-func (a *App) rerollDecision(context *gin.Context) {
-	account := sessionAccount(context)
-	decisionID, err := strconv.ParseInt(context.Param("decisionID"), 10, 64)
-	if err != nil || decisionID <= 0 {
-		writeError(context, http.StatusNotFound, codeDecisionNotFound, "Decision 不存在")
-		return
-	}
-	state, err := a.mealLifecycle.Reroll(context, account.ID, decisionID)
-	switch {
-	case errors.Is(err, errCandidatePoolEmpty):
-		writeError(
-			context,
-			http.StatusConflict,
-			codeCandidatePoolEmpty,
-			"Candidate pool 为空，无法 Reroll Decision",
-		)
-	case errors.Is(err, errDecisionNotFound):
-		writeError(context, http.StatusNotFound, codeDecisionNotFound, "Decision 不存在")
-	case err != nil:
-		writeInternalError(context, "reroll Decision", err)
-	default:
-		context.JSON(http.StatusOK, state)
-	}
-}
-
-func (a *App) acceptDecision(context *gin.Context) {
-	account := sessionAccount(context)
-	decisionID, err := strconv.ParseInt(context.Param("decisionID"), 10, 64)
-	if err != nil || decisionID <= 0 {
-		writeError(context, http.StatusNotFound, codeDecisionNotFound, "Decision 不存在")
-		return
-	}
-	result, err := a.mealLifecycle.Accept(context, account.ID, decisionID)
-	switch {
-	case errors.Is(err, errDecisionNotFound):
-		writeError(context, http.StatusNotFound, codeDecisionNotFound, "Decision 不存在")
-	case err != nil:
-		writeInternalError(context, "accept Decision", err)
-	default:
-		context.JSON(http.StatusOK, result)
-	}
-}
-
-func (a *App) ratePendingRating(context *gin.Context) {
-	account := sessionAccount(context)
-	pendingRatingID, err := strconv.ParseInt(context.Param("pendingRatingID"), 10, 64)
-	if err != nil || pendingRatingID <= 0 {
-		writeError(context, http.StatusNotFound, codePendingRatingNotFound, "Pending rating 不存在")
-		return
-	}
-	var input tasteRatingInput
-	if err := context.ShouldBindJSON(&input); err != nil || input.Rating < 1 || input.Rating > 5 {
-		writeError(context, http.StatusBadRequest, codeInvalidRequest, "Taste rating 必须为 1–5")
-		return
-	}
-	result, err := a.mealLifecycle.Rate(context, account.ID, pendingRatingID, input.Rating)
-	switch {
-	case errors.Is(err, errPendingRatingNotFound):
-		writeError(context, http.StatusNotFound, codePendingRatingNotFound, "Pending rating 不存在")
-	case errors.Is(err, errTasteRatingConflict):
-		writeError(context, http.StatusConflict, codeRatingConflict, "Taste rating 与已有结果冲突")
-	case err != nil:
-		writeInternalError(context, "resolve Pending rating", err)
-	default:
-		context.JSON(http.StatusOK, result)
 	}
 }

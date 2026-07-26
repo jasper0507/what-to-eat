@@ -1,4 +1,4 @@
-package server
+package onboarding
 
 import (
 	"bytes"
@@ -21,7 +21,7 @@ const (
 	nimResponseLimit  = 1 << 20
 )
 
-const onboardingSystemPrompt = `你是“今天吃什么”的首次使用访谈助手。用简短自然的中文追问 Eater 喜欢的具体 Dish，并在信息足够时整理偏好。
+const systemPrompt = `你是“今天吃什么”的首次使用访谈助手。用简短自然的中文追问 Eater 喜欢的具体 Dish，并在信息足够时整理偏好。
 只输出一个 JSON 对象，不要 Markdown 或额外文字：
 {"reply":"给 Eater 的自然回复","complete":false,"preferences":[{"dish_name":"具体菜名","weight":1}]}
 complete 仅在 Eater 已明确给出至少一道具体菜名且偏好足够建立初始 Candidate pool 时为 true。
@@ -35,17 +35,30 @@ type NIMConfig struct {
 	Required bool
 }
 
-type onboardingNIM interface {
-	Respond(context.Context, []onboardingMessage) (nimInterviewResult, error)
+// NIM 是 Onboarding interview 的私有 LLM port（ADR-0019）：生产为 httpNIM，
+// 测试为脚本化 adapter。
+type NIM interface {
+	Respond(context.Context, []Message) (NIMResult, error)
+}
+
+type NIMResult struct {
+	Reply       string          `json:"reply"`
+	Complete    bool            `json:"complete"`
+	Preferences []NIMPreference `json:"preferences"`
+}
+
+type NIMPreference struct {
+	DishName string  `json:"dish_name"`
+	Weight   float64 `json:"weight"`
 }
 
 type unavailableNIM struct{}
 
 func (unavailableNIM) Respond(
 	context.Context,
-	[]onboardingMessage,
-) (nimInterviewResult, error) {
-	return nimInterviewResult{}, errors.New("NVIDIA NIM is not configured")
+	[]Message,
+) (NIMResult, error) {
+	return NIMResult{}, errors.New("NVIDIA NIM is not configured")
 }
 
 type httpNIM struct {
@@ -55,18 +68,7 @@ type httpNIM struct {
 	client   *http.Client
 }
 
-type nimInterviewResult struct {
-	Reply       string          `json:"reply"`
-	Complete    bool            `json:"complete"`
-	Preferences []nimPreference `json:"preferences"`
-}
-
-type nimPreference struct {
-	DishName string  `json:"dish_name"`
-	Weight   float64 `json:"weight"`
-}
-
-func newNIMAdapter(config *NIMConfig) (onboardingNIM, error) {
+func NewNIMAdapter(config *NIMConfig) (NIM, error) {
 	if config == nil || config.APIKey == "" {
 		if config != nil && config.Required {
 			return nil, errors.New("NVIDIA API key is required")
@@ -110,20 +112,20 @@ func newNIMAdapter(config *NIMConfig) (onboardingNIM, error) {
 
 func (n *httpNIM) Respond(
 	context context.Context,
-	messages []onboardingMessage,
-) (nimInterviewResult, error) {
-	providerMessages := make([]onboardingMessage, 0, len(messages)+1)
-	providerMessages = append(providerMessages, onboardingMessage{
+	messages []Message,
+) (NIMResult, error) {
+	providerMessages := make([]Message, 0, len(messages)+1)
+	providerMessages = append(providerMessages, Message{
 		Role:    "system",
-		Content: onboardingSystemPrompt,
+		Content: systemPrompt,
 	})
 	providerMessages = append(providerMessages, messages...)
 	body, err := json.Marshal(struct {
-		Model       string              `json:"model"`
-		Messages    []onboardingMessage `json:"messages"`
-		Temperature float64             `json:"temperature"`
-		MaxTokens   int                 `json:"max_tokens"`
-		Stream      bool                `json:"stream"`
+		Model       string    `json:"model"`
+		Messages    []Message `json:"messages"`
+		Temperature float64   `json:"temperature"`
+		MaxTokens   int       `json:"max_tokens"`
+		Stream      bool      `json:"stream"`
 	}{
 		Model:       n.model,
 		Messages:    providerMessages,
@@ -132,7 +134,7 @@ func (n *httpNIM) Respond(
 		Stream:      false,
 	})
 	if err != nil {
-		return nimInterviewResult{}, fmt.Errorf("encode NIM request: %w", err)
+		return NIMResult{}, fmt.Errorf("encode NIM request: %w", err)
 	}
 
 	request, err := http.NewRequestWithContext(
@@ -142,25 +144,25 @@ func (n *httpNIM) Respond(
 		bytes.NewReader(body),
 	)
 	if err != nil {
-		return nimInterviewResult{}, fmt.Errorf("create NIM request: %w", err)
+		return NIMResult{}, fmt.Errorf("create NIM request: %w", err)
 	}
 	request.Header.Set("Authorization", "Bearer "+n.apiKey)
 	request.Header.Set("Content-Type", "application/json")
 
 	response, err := n.client.Do(request)
 	if err != nil {
-		return nimInterviewResult{}, fmt.Errorf("call NIM: %w", err)
+		return NIMResult{}, fmt.Errorf("call NIM: %w", err)
 	}
 	defer response.Body.Close()
 	responseBody, err := io.ReadAll(io.LimitReader(response.Body, nimResponseLimit+1))
 	if err != nil {
-		return nimInterviewResult{}, fmt.Errorf("read NIM response: %w", err)
+		return NIMResult{}, fmt.Errorf("read NIM response: %w", err)
 	}
 	if len(responseBody) > nimResponseLimit {
-		return nimInterviewResult{}, errors.New("NIM response is too large")
+		return NIMResult{}, errors.New("NIM response is too large")
 	}
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return nimInterviewResult{}, fmt.Errorf("NIM returned HTTP %d", response.StatusCode)
+		return NIMResult{}, fmt.Errorf("NIM returned HTTP %d", response.StatusCode)
 	}
 
 	var completion struct {
@@ -171,31 +173,31 @@ func (n *httpNIM) Respond(
 		} `json:"choices"`
 	}
 	if err := json.Unmarshal(responseBody, &completion); err != nil {
-		return nimInterviewResult{}, errors.New("NIM returned invalid completion JSON")
+		return NIMResult{}, errors.New("NIM returned invalid completion JSON")
 	}
 	if len(completion.Choices) == 0 {
-		return nimInterviewResult{}, errors.New("NIM returned no completion choice")
+		return NIMResult{}, errors.New("NIM returned no completion choice")
 	}
 
-	var result nimInterviewResult
+	var result NIMResult
 	if err := json.Unmarshal(
 		[]byte(strings.TrimSpace(completion.Choices[0].Message.Content)),
 		&result,
 	); err != nil {
-		return nimInterviewResult{}, errors.New("NIM returned invalid interview JSON")
+		return NIMResult{}, errors.New("NIM returned invalid interview JSON")
 	}
 	result.Reply = strings.TrimSpace(result.Reply)
 	if result.Reply == "" || utf8.RuneCountInString(result.Reply) > 2_000 {
-		return nimInterviewResult{}, errors.New("NIM returned an invalid interview reply")
+		return NIMResult{}, errors.New("NIM returned an invalid interview reply")
 	}
 	if len(result.Preferences) > 20 {
-		return nimInterviewResult{}, errors.New("NIM returned too many preferences")
+		return NIMResult{}, errors.New("NIM returned too many preferences")
 	}
 	for _, preference := range result.Preferences {
 		if preference.DishName != strings.TrimSpace(preference.DishName) ||
 			preference.DishName == "" ||
 			utf8.RuneCountInString(preference.DishName) > 100 {
-			return nimInterviewResult{}, errors.New("NIM returned an invalid Dish name")
+			return NIMResult{}, errors.New("NIM returned an invalid Dish name")
 		}
 	}
 	return result, nil
