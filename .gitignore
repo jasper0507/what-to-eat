@@ -4,3 +4,4 @@ backups/
 data/
 frontend/dist/
 frontend/node_modules/
+/testserver
