@@ -418,10 +418,7 @@ func (o *onboardingInterview) accountLock(accountID int64) *sync.Mutex {
 }
 
 func (a *App) getOnboardingInterview(context *gin.Context) {
-	account, ok := a.currentAccount(context)
-	if !ok {
-		return
-	}
+	account := sessionAccount(context)
 	state, err := a.onboarding.State(context, account.ID)
 	if err != nil {
 		writeInternalError(context, "read Onboarding interview", err)
@@ -431,10 +428,7 @@ func (a *App) getOnboardingInterview(context *gin.Context) {
 }
 
 func (a *App) sendOnboardingMessage(context *gin.Context) {
-	account, ok := a.currentAccount(context)
-	if !ok {
-		return
-	}
+	account := sessionAccount(context)
 	context.Request.Body = http.MaxBytesReader(context.Writer, context.Request.Body, 4<<10)
 	var input onboardingMessageInput
 	if err := context.ShouldBindJSON(&input); err != nil {
@@ -455,10 +449,7 @@ func (a *App) sendOnboardingMessage(context *gin.Context) {
 }
 
 func (a *App) retryOnboardingInterview(context *gin.Context) {
-	account, ok := a.currentAccount(context)
-	if !ok {
-		return
-	}
+	account := sessionAccount(context)
 	state, err := a.onboarding.Retry(context, account.ID)
 	if err != nil {
 		a.writeOnboardingError(context, account.ID, err)
@@ -468,10 +459,7 @@ func (a *App) retryOnboardingInterview(context *gin.Context) {
 }
 
 func (a *App) useManualOnboarding(context *gin.Context) {
-	account, ok := a.currentAccount(context)
-	if !ok {
-		return
-	}
+	account := sessionAccount(context)
 	state, err := a.onboarding.Manual(context, account.ID)
 	if err != nil {
 		a.writeOnboardingError(context, account.ID, err)

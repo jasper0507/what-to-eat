@@ -1,28 +1,18 @@
 package server
 
 import (
-	"crypto/hmac"
-	"crypto/rand"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"log"
 	mathrand "math/rand"
-	"net"
 	"net/http"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
-	"unicode"
 	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
-	"golang.org/x/crypto/bcrypt"
-	sqliteDriver "modernc.org/sqlite"
-	sqlite3 "modernc.org/sqlite/lib"
 )
 
 type Config struct {
@@ -36,31 +26,13 @@ type Config struct {
 }
 
 type App struct {
-	db                *sql.DB
-	router            *gin.Engine
-	sessionSecret     []byte
-	secureCookies     bool
-	dummyPasswordHash []byte
-	loginFailures     map[string]loginFailureWindow
-	loginFailuresMu   sync.Mutex
-	candidatePool     *candidatePool
-	mealLifecycle     *mealLifecycle
-	onboarding        *onboardingInterview
-}
-
-type loginFailureWindow struct {
-	count     int
-	expiresAt time.Time
-}
-
-type accountResponse struct {
-	ID       int64  `json:"id"`
-	Username string `json:"username"`
-}
-
-type credentials struct {
-	Username string `json:"username"`
-	Password string `json:"password"`
+	db            *sql.DB
+	router        *gin.Engine
+	secureCookies bool
+	sessions      *accountSessions
+	candidatePool *candidatePool
+	mealLifecycle *mealLifecycle
+	onboarding    *onboardingInterview
 }
 
 type catalogDishResponse struct {
@@ -198,7 +170,7 @@ func newApp(
 		}
 	}
 
-	dummyPasswordHash, err := bcrypt.GenerateFromPassword([]byte("dummy-password"), bcrypt.DefaultCost)
+	sessions, err := newAccountSessions(db, config.SessionSecret, time.Now)
 	if err != nil {
 		db.Close()
 		return nil, err
@@ -206,14 +178,12 @@ func newApp(
 
 	pool := newCandidatePool(db)
 	app := &App{
-		db:                db,
-		sessionSecret:     append([]byte(nil), config.SessionSecret...),
-		secureCookies:     config.SecureCookies,
-		dummyPasswordHash: dummyPasswordHash,
-		loginFailures:     make(map[string]loginFailureWindow),
-		candidatePool:     pool,
-		mealLifecycle:     newMealLifecycle(db, pool, decisionRandom, discovery),
-		onboarding:        newOnboardingInterview(db, pool, nim),
+		db:            db,
+		secureCookies: config.SecureCookies,
+		sessions:      sessions,
+		candidatePool: pool,
+		mealLifecycle: newMealLifecycle(db, pool, decisionRandom, discovery),
+		onboarding:    newOnboardingInterview(db, pool, nim),
 	}
 	app.routes(config.WebDir)
 	return app, nil
@@ -228,22 +198,23 @@ func (a *App) routes(webDir string) {
 	})
 	router.POST("/api/auth/register", a.register)
 	router.POST("/api/auth/login", a.login)
-	router.GET("/api/auth/session", a.session)
-	router.GET("/api/catalog/dishes", a.searchCatalog)
-	router.GET("/api/catalog/recipes", a.getRecipe)
-	router.GET("/api/candidate-pool/dishes", a.listCandidatePool)
-	router.POST("/api/candidate-pool/dishes", a.addCandidatePoolDish)
-	router.PATCH("/api/candidate-pool/dishes", a.updateCandidatePoolDish)
-	router.DELETE("/api/candidate-pool/dishes", a.removeCandidatePoolDish)
-	router.GET("/api/onboarding/interview", a.getOnboardingInterview)
-	router.POST("/api/onboarding/interview/messages", a.sendOnboardingMessage)
-	router.POST("/api/onboarding/interview/retry", a.retryOnboardingInterview)
-	router.POST("/api/onboarding/interview/manual", a.useManualOnboarding)
-	router.GET("/api/meals/resume", a.resumeMeal)
-	router.POST("/api/meals", a.beginMeal)
-	router.POST("/api/decisions/:decisionID/reroll", a.rerollDecision)
-	router.POST("/api/decisions/:decisionID/accept", a.acceptDecision)
-	router.POST("/api/pending-ratings/:pendingRatingID/rate", a.ratePendingRating)
+	authorized := router.Group("/api", a.requireAccount)
+	authorized.GET("/auth/session", a.session)
+	authorized.GET("/catalog/dishes", a.searchCatalog)
+	authorized.GET("/catalog/recipes", a.getRecipe)
+	authorized.GET("/candidate-pool/dishes", a.listCandidatePool)
+	authorized.POST("/candidate-pool/dishes", a.addCandidatePoolDish)
+	authorized.PATCH("/candidate-pool/dishes", a.updateCandidatePoolDish)
+	authorized.DELETE("/candidate-pool/dishes", a.removeCandidatePoolDish)
+	authorized.GET("/onboarding/interview", a.getOnboardingInterview)
+	authorized.POST("/onboarding/interview/messages", a.sendOnboardingMessage)
+	authorized.POST("/onboarding/interview/retry", a.retryOnboardingInterview)
+	authorized.POST("/onboarding/interview/manual", a.useManualOnboarding)
+	authorized.GET("/meals/resume", a.resumeMeal)
+	authorized.POST("/meals", a.beginMeal)
+	authorized.POST("/decisions/:decisionID/reroll", a.rerollDecision)
+	authorized.POST("/decisions/:decisionID/accept", a.acceptDecision)
+	authorized.POST("/pending-ratings/:pendingRatingID/rate", a.ratePendingRating)
 	if webDir != "" {
 		indexPath := filepath.Join(webDir, "index.html")
 		router.Static("/assets", filepath.Join(webDir, "assets"))
@@ -269,202 +240,7 @@ func (a *App) Close() error {
 	return a.db.Close()
 }
 
-func (a *App) register(context *gin.Context) {
-	var input credentials
-	if err := context.ShouldBindJSON(&input); err != nil || !validCredentials(input) {
-		writeError(context, http.StatusBadRequest, "invalid_request", "用户名或密码不符合要求")
-		return
-	}
-
-	hash, err := bcrypt.GenerateFromPassword([]byte(input.Password), bcrypt.DefaultCost)
-	if err != nil {
-		writeError(context, http.StatusBadRequest, "invalid_request", "用户名或密码不符合要求")
-		return
-	}
-
-	transaction, err := a.db.BeginTx(context, nil)
-	if err != nil {
-		writeInternalError(context, "begin registration transaction", err)
-		return
-	}
-	defer transaction.Rollback()
-
-	result, err := transaction.ExecContext(
-		context,
-		"INSERT INTO accounts (username, username_key, password_hash) VALUES (?, ?, ?)",
-		input.Username,
-		strings.ToLower(input.Username),
-		string(hash),
-	)
-	if err != nil {
-		if isUniqueConstraint(err) {
-			writeError(context, http.StatusConflict, "account_unavailable", "无法创建 Account")
-		} else {
-			writeInternalError(context, "create Account", err)
-		}
-		return
-	}
-	id, err := result.LastInsertId()
-	if err != nil {
-		writeInternalError(context, "read created Account ID", err)
-		return
-	}
-
-	token, tokenHash, expiresAt, err := newSession(a.sessionSecret)
-	if err != nil {
-		writeInternalError(context, "generate registration session", err)
-		return
-	}
-	if _, err := transaction.ExecContext(
-		context,
-		"INSERT INTO sessions (token_hash, account_id, expires_at) VALUES (?, ?, ?)",
-		tokenHash,
-		id,
-		expiresAt.Unix(),
-	); err != nil {
-		writeInternalError(context, "store registration session", err)
-		return
-	}
-	if err := transaction.Commit(); err != nil {
-		writeInternalError(context, "commit registration", err)
-		return
-	}
-
-	a.setSessionCookie(context, token, expiresAt)
-	context.JSON(http.StatusCreated, gin.H{
-		"account": accountResponse{ID: id, Username: input.Username},
-	})
-}
-
-func (a *App) login(context *gin.Context) {
-	var input credentials
-	if err := context.ShouldBindJSON(&input); err != nil {
-		writeError(context, http.StatusBadRequest, "invalid_request", "请求格式无效")
-		return
-	}
-	clientIP := requestIP(context.Request)
-	if a.loginIsBlocked(clientIP, time.Now()) {
-		writeError(context, http.StatusTooManyRequests, "rate_limited", "登录尝试过多，请稍后再试")
-		return
-	}
-
-	var account accountResponse
-	passwordHash := a.dummyPasswordHash
-	var storedHash string
-	err := a.db.QueryRowContext(
-		context,
-		"SELECT id, username, password_hash FROM accounts WHERE username_key = ?",
-		strings.ToLower(input.Username),
-	).Scan(&account.ID, &account.Username, &storedHash)
-	switch {
-	case err == nil:
-		passwordHash = []byte(storedHash)
-	case errors.Is(err, sql.ErrNoRows):
-	default:
-		writeInternalError(context, "find Account for login", err)
-		return
-	}
-
-	if err := bcrypt.CompareHashAndPassword(passwordHash, []byte(input.Password)); err != nil || account.ID == 0 {
-		a.recordLoginFailure(clientIP, time.Now())
-		writeError(context, http.StatusUnauthorized, "invalid_credentials", "用户名或密码错误")
-		return
-	}
-
-	token, tokenHash, expiresAt, err := newSession(a.sessionSecret)
-	if err != nil {
-		writeInternalError(context, "generate login session", err)
-		return
-	}
-	if _, err := a.db.ExecContext(
-		context,
-		"INSERT INTO sessions (token_hash, account_id, expires_at) VALUES (?, ?, ?)",
-		tokenHash,
-		account.ID,
-		expiresAt.Unix(),
-	); err != nil {
-		writeInternalError(context, "store login session", err)
-		return
-	}
-
-	a.setSessionCookie(context, token, expiresAt)
-	context.JSON(http.StatusOK, gin.H{"account": account})
-}
-
-func requestIP(request *http.Request) string {
-	host, _, err := net.SplitHostPort(request.RemoteAddr)
-	if err != nil {
-		return request.RemoteAddr
-	}
-	return host
-}
-
-func (a *App) loginIsBlocked(clientIP string, now time.Time) bool {
-	a.loginFailuresMu.Lock()
-	defer a.loginFailuresMu.Unlock()
-
-	window, exists := a.loginFailures[clientIP]
-	if !exists || !now.Before(window.expiresAt) {
-		delete(a.loginFailures, clientIP)
-		return false
-	}
-	return window.count >= 5
-}
-
-func (a *App) recordLoginFailure(clientIP string, now time.Time) {
-	a.loginFailuresMu.Lock()
-	defer a.loginFailuresMu.Unlock()
-
-	window, exists := a.loginFailures[clientIP]
-	if !exists || !now.Before(window.expiresAt) {
-		window = loginFailureWindow{expiresAt: now.Add(time.Minute)}
-	}
-	window.count++
-	a.loginFailures[clientIP] = window
-}
-
-func (a *App) session(context *gin.Context) {
-	account, ok := a.currentAccount(context)
-	if !ok {
-		return
-	}
-	context.JSON(http.StatusOK, gin.H{"account": account})
-}
-
-func (a *App) currentAccount(context *gin.Context) (accountResponse, bool) {
-	cookie, err := context.Cookie("what2eat_session")
-	if err != nil {
-		writeError(context, http.StatusUnauthorized, "unauthorized", "需要登录")
-		return accountResponse{}, false
-	}
-
-	tokenHash := hashSessionToken(a.sessionSecret, cookie)
-	var account accountResponse
-	err = a.db.QueryRowContext(
-		context,
-		`SELECT accounts.id, accounts.username
-		 FROM sessions
-		 JOIN accounts ON accounts.id = sessions.account_id
-		 WHERE sessions.token_hash = ? AND sessions.expires_at > ?`,
-		tokenHash,
-		time.Now().Unix(),
-	).Scan(&account.ID, &account.Username)
-	if errors.Is(err, sql.ErrNoRows) {
-		writeError(context, http.StatusUnauthorized, "unauthorized", "需要登录")
-		return accountResponse{}, false
-	}
-	if err != nil {
-		writeInternalError(context, "restore Account session", err)
-		return accountResponse{}, false
-	}
-
-	return account, true
-}
-
 func (a *App) searchCatalog(context *gin.Context) {
-	if _, ok := a.currentAccount(context); !ok {
-		return
-	}
 	query := strings.TrimSpace(context.Query("q"))
 	if query == "" || utf8.RuneCountInString(query) > 100 {
 		writeError(context, http.StatusBadRequest, "invalid_query", "请输入有效的 Dish 名称")
@@ -503,52 +279,6 @@ func (a *App) searchCatalog(context *gin.Context) {
 	context.JSON(http.StatusOK, gin.H{"dishes": dishes})
 }
 
-func newSession(secret []byte) (token string, tokenHash []byte, expiresAt time.Time, err error) {
-	randomBytes := make([]byte, 32)
-	if _, err = rand.Read(randomBytes); err != nil {
-		return "", nil, time.Time{}, err
-	}
-	token = base64.RawURLEncoding.EncodeToString(randomBytes)
-	return token, hashSessionToken(secret, token), time.Now().Add(30 * 24 * time.Hour), nil
-}
-
-func hashSessionToken(secret []byte, token string) []byte {
-	hash := hmac.New(sha256.New, secret)
-	_, _ = hash.Write([]byte(token))
-	return hash.Sum(nil)
-}
-
-func (a *App) setSessionCookie(context *gin.Context, token string, expiresAt time.Time) {
-	http.SetCookie(context.Writer, &http.Cookie{
-		Name:     "what2eat_session",
-		Value:    token,
-		Path:     "/",
-		Expires:  expiresAt,
-		MaxAge:   int(time.Until(expiresAt).Seconds()),
-		HttpOnly: true,
-		Secure:   a.secureCookies,
-		SameSite: http.SameSiteLaxMode,
-	})
-}
-
-func validCredentials(input credentials) bool {
-	if input.Username != strings.TrimSpace(input.Username) {
-		return false
-	}
-	usernameLength := utf8.RuneCountInString(input.Username)
-	if usernameLength < 3 || usernameLength > 32 {
-		return false
-	}
-	for _, character := range input.Username {
-		if !unicode.IsLetter(character) && !unicode.IsNumber(character) && character != '_' && character != '-' {
-			return false
-		}
-	}
-	passwordBytes := len([]byte(input.Password))
-	passwordCharacters := utf8.RuneCountInString(input.Password)
-	return passwordCharacters >= 8 && passwordBytes <= 72
-}
-
 func writeError(context *gin.Context, status int, code, message string) {
 	context.JSON(status, gin.H{
 		"error": gin.H{
@@ -561,9 +291,4 @@ func writeError(context *gin.Context, status int, code, message string) {
 func writeInternalError(context *gin.Context, operation string, err error) {
 	log.Printf("%s: %v", operation, err)
 	writeError(context, http.StatusInternalServerError, "internal_error", "服务暂时不可用")
-}
-
-func isUniqueConstraint(err error) bool {
-	var sqliteError *sqliteDriver.Error
-	return errors.As(err, &sqliteError) && sqliteError.Code() == sqlite3.SQLITE_CONSTRAINT_UNIQUE
 }

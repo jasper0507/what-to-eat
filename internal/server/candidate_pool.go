@@ -234,10 +234,7 @@ func (p *candidatePool) Reject(
 }
 
 func (a *App) listCandidatePool(context *gin.Context) {
-	account, ok := a.currentAccount(context)
-	if !ok {
-		return
-	}
+	account := sessionAccount(context)
 	dishes, err := a.candidatePool.List(context, account.ID)
 	if err != nil {
 		writeInternalError(context, "list Candidate pool", err)
@@ -247,10 +244,7 @@ func (a *App) listCandidatePool(context *gin.Context) {
 }
 
 func (a *App) addCandidatePoolDish(context *gin.Context) {
-	account, ok := a.currentAccount(context)
-	if !ok {
-		return
-	}
+	account := sessionAccount(context)
 
 	var input candidateDishInput
 	if err := context.ShouldBindJSON(&input); err != nil ||
@@ -273,10 +267,7 @@ func (a *App) addCandidatePoolDish(context *gin.Context) {
 }
 
 func (a *App) updateCandidatePoolDish(context *gin.Context) {
-	account, ok := a.currentAccount(context)
-	if !ok {
-		return
-	}
+	account := sessionAccount(context)
 
 	var input candidateDishInput
 	if err := context.ShouldBindJSON(&input); err != nil ||
@@ -299,10 +290,7 @@ func (a *App) updateCandidatePoolDish(context *gin.Context) {
 }
 
 func (a *App) removeCandidatePoolDish(context *gin.Context) {
-	account, ok := a.currentAccount(context)
-	if !ok {
-		return
-	}
+	account := sessionAccount(context)
 	dishID := context.Query("dish_id")
 	if !validDishID(dishID) {
 		writeError(context, http.StatusBadRequest, "invalid_request", "Dish 无效")

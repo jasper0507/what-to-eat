@@ -55,9 +55,6 @@ func catalogDish(sourcePath, name string) catalogDishResponse {
 }
 
 func (a *App) getRecipe(context *gin.Context) {
-	if _, ok := a.currentAccount(context); !ok {
-		return
-	}
 	dishID := context.Query("dish_id")
 	if !validDishID(dishID) {
 		writeError(context, http.StatusBadRequest, "invalid_request", "Dish 无效")

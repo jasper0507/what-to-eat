@@ -1145,10 +1145,7 @@ func preferenceWeightForTasteRating(rating int) (float64, bool) {
 }
 
 func (a *App) resumeMeal(context *gin.Context) {
-	account, ok := a.currentAccount(context)
-	if !ok {
-		return
-	}
+	account := sessionAccount(context)
 	state, err := a.mealLifecycle.Resume(context, account.ID)
 	if err != nil {
 		writeInternalError(context, "resume Meal lifecycle", err)
@@ -1158,10 +1155,7 @@ func (a *App) resumeMeal(context *gin.Context) {
 }
 
 func (a *App) beginMeal(context *gin.Context) {
-	account, ok := a.currentAccount(context)
-	if !ok {
-		return
-	}
+	account := sessionAccount(context)
 	state, created, err := a.mealLifecycle.Begin(context, account.ID)
 	switch {
 	case errors.Is(err, errPendingRatings):
@@ -1190,10 +1184,7 @@ func (a *App) beginMeal(context *gin.Context) {
 }
 
 func (a *App) rerollDecision(context *gin.Context) {
-	account, ok := a.currentAccount(context)
-	if !ok {
-		return
-	}
+	account := sessionAccount(context)
 	decisionID, err := strconv.ParseInt(context.Param("decisionID"), 10, 64)
 	if err != nil || decisionID <= 0 {
 		writeError(context, http.StatusNotFound, "decision_not_found", "Decision 不存在")
@@ -1218,10 +1209,7 @@ func (a *App) rerollDecision(context *gin.Context) {
 }
 
 func (a *App) acceptDecision(context *gin.Context) {
-	account, ok := a.currentAccount(context)
-	if !ok {
-		return
-	}
+	account := sessionAccount(context)
 	decisionID, err := strconv.ParseInt(context.Param("decisionID"), 10, 64)
 	if err != nil || decisionID <= 0 {
 		writeError(context, http.StatusNotFound, "decision_not_found", "Decision 不存在")
@@ -1239,10 +1227,7 @@ func (a *App) acceptDecision(context *gin.Context) {
 }
 
 func (a *App) ratePendingRating(context *gin.Context) {
-	account, ok := a.currentAccount(context)
-	if !ok {
-		return
-	}
+	account := sessionAccount(context)
 	pendingRatingID, err := strconv.ParseInt(context.Param("pendingRatingID"), 10, 64)
 	if err != nil || pendingRatingID <= 0 {
 		writeError(context, http.StatusNotFound, "pending_rating_not_found", "Pending rating 不存在")
