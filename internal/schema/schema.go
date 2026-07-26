@@ -22,6 +22,7 @@ var migrations = []struct {
 	{"Meal outcomes", migrateMealOutcomesSchema},
 	{"Catalog enrichment", migrateCatalogEnrichmentSchema},
 	{"Pool demotion", migratePoolDemotionSchema},
+	{"Interview retirement", migrateInterviewRetirementSchema},
 }
 
 // Migrate 按序执行 schema 台账；任何一张表长什么样，读本文件即可回答。
@@ -74,23 +75,6 @@ func applyBaseSchema(db *sql.DB) error {
 			tier INTEGER NOT NULL CHECK (tier IN (3, 4, 5)),
 			PRIMARY KEY (account_id, dish_id)
 		);
-		CREATE TABLE IF NOT EXISTS onboarding_interviews (
-			account_id INTEGER PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
-			status TEXT NOT NULL CHECK (
-				status IN ('in_progress', 'failed', 'completed', 'manual')
-			),
-			attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
-			updated_at INTEGER NOT NULL
-		);
-		CREATE TABLE IF NOT EXISTS onboarding_messages (
-			id INTEGER PRIMARY KEY,
-			account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
-			role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
-			content TEXT NOT NULL,
-			created_at INTEGER NOT NULL
-		);
-		CREATE INDEX IF NOT EXISTS onboarding_messages_by_account
-			ON onboarding_messages(account_id, id);
 		CREATE TABLE IF NOT EXISTS meals (
 			id INTEGER PRIMARY KEY,
 			account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
@@ -433,6 +417,15 @@ func migrateCatalogEnrichmentSchema(db *sql.DB) error {
 
 // migratePoolDemotionSchema 建自动降档的连换计数表（ADR-0022：被换 +1、
 // 被接受清零、达 4 降一档并清零）。
+// AI 口味访谈已废止（2026-07-27 修正案）：老库里的访谈表整块清退。
+func migrateInterviewRetirementSchema(db *sql.DB) error {
+	_, err := db.Exec(`
+		DROP TABLE IF EXISTS onboarding_messages;
+		DROP TABLE IF EXISTS onboarding_interviews;
+	`)
+	return err
+}
+
 func migratePoolDemotionSchema(db *sql.DB) error {
 	_, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS pool_demotions (

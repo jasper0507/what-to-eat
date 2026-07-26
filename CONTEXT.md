@@ -33,7 +33,7 @@ The eater's editable subset of catalog dishes that the decision algorithm may pi
 _Avoid_: Catalog (catalog is the full source), favorites (favorites are weight, not membership)
 
 **Preference weight**:
-The eater's relative affinity for a dish in their candidate pool (higher = more loved). Used as the base weight before cooldown / recency / session penalties. The number is internal-only: eaters express and adjust affinity exclusively through the taste-rating feeling tiers (labeled, slang), in the taste interview, manual pool edits, and post-meal ratings alike.
+The eater's relative affinity for a dish in their candidate pool (higher = more loved). Used as the base weight before cooldown / recency / session penalties. The number is internal-only: eaters express and adjust affinity exclusively through the taste-rating feeling tiers (labeled, slang), in starter-pack picks, manual pool edits, and post-meal ratings alike.
 _Avoid_: Priority, score (too generic), rating (implies 5-star UI); numeric weight controls in UI (sliders, spinners, bare numbers)
 
 **Decision**:
@@ -76,12 +76,12 @@ _Avoid_: Ban period, day-based cooldown (rejected for v1 anti-repeat)
 A longer lookback than cooldown, also in **eating-record counts**, in which past acceptances of a dish only reduce its weight instead of forbidding it.
 _Avoid_: History window (ambiguous with full history storage); day-based windows for anti-repeat
 
-**Taste interview**:
-A guided AI conversation (product-hosted, via NVIDIA NIM on the server), reachable at any time, that builds or extends the candidate pool and sets preference weights. Always context-aware: it carries the eater's current pool (dish names + weights), so an empty-pool first run is just its most important invocation, and later runs extend the pool or adjust weights without re-proposing dishes the eater already has. Not used for the daily decision itself.
-_Avoid_: Onboarding interview (renamed 2026-07-27 — implied first-run-only), chatbot, daily assistant (daily path is non-AI decision); client-side API keys
+**Starter pack**:
+A fixed, curated set of widely loved catalog dishes offered on the empty-pool welcome as the primary way to seed a candidate pool: the eater picks the ones they like and assigns feeling tiers on the spot. The other pool-entry path is manual catalog search. There is no AI onboarding — the taste interview was abolished 2026-07-27 (ADR-0023).
+_Avoid_: Taste interview / onboarding interview (abolished, do not revive), default pool (the eater always picks; nothing enters unchosen), recommendation
 
 **Account**:
-The signed-in identity (first-party username + password) that owns an eater's candidate pool, preference weights, eating records, and taste interview results. Required before using the product. No third-party login providers in v1.
+The signed-in identity (first-party username + password) that owns an eater's candidate pool, preference weights, and eating records. Required before using the product. No third-party login providers in v1.
 _Avoid_: Profile (ambiguous), user (prefer eater for the decision subject; account is the auth identity); OAuth identity
 
 **Discovery**:
@@ -89,7 +89,7 @@ A decision whose dish is drawn from the catalog **outside** the candidate pool, 
 _Avoid_: Recommendation, random, surprise me (vague); do not call a pool pick "discovery"; embedding-based "similar" in v1
 
 **Taste rating**:
-The eater's 1–5 feedback on a dish after trying it, each level shown with a slang feeling label (not bare numbers). Canonical tier labels: 1 拉完了, 2 NPC, 3 人上人, 4 顶尖, 5 夯. Drives pool admission (≥3 人上人+), preference weight, and rejection mark (≤2). Pool-add flows (taste interview, manual add) offer only the top three tiers — you never add a dish you already dismiss; the bottom two exist only in post-meal rating, where they mean rejection.
+The eater's 1–5 feedback on a dish after trying it, each level shown with a slang feeling label (not bare numbers). Canonical tier labels: 1 拉完了, 2 NPC, 3 人上人, 4 顶尖, 5 夯. Drives pool admission (≥3 人上人+), preference weight, and rejection mark (≤2). Pool-add flows (starter pack, manual add) offer only the top three tiers — you never add a dish you already dismiss; the bottom two exist only in post-meal rating, where they mean rejection.
 _Avoid_: Like/dislike only (too coarse for weight); do not present as a numeric-only control without labels
 
 **Pending rating**:

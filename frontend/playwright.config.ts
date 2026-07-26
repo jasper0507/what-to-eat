@@ -16,7 +16,6 @@ export default defineConfig({
     timeout: 120_000,
     env: {
       GOCACHE: "/tmp/what2eat-browser-go-cache",
-      NVIDIA_API_KEY: "browser-test-secret",
       PORT: "4174",
     },
   },

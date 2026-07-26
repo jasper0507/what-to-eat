@@ -83,14 +83,14 @@ describe("apiFetch", () => {
         {
           error: {
             code: "rate_limited",
-            message: "访谈消息过于频繁，请稍后再试",
+            message: "操作过于频繁，请稍后再试",
           },
         },
         { "Retry-After": "60" },
       ),
     );
     const error = (await caughtError(
-      apiFetch("POST", "/api/onboarding/interview/messages", {
+      apiFetch("POST", "/api/x", {
         body: { message: "hi" },
       }),
     )) as ApiError;

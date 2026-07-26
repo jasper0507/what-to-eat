@@ -1,6 +1,6 @@
 // Package server 是 HTTP adapter 与 composition root：装配各模块、注册
 // 路由、把模块结果与错误翻译成 wire 契约。领域规则住在
-// internal/{account,pool,meal,catalog,onboarding} 各模块包里。
+// internal/{account,pool,meal,catalog} 各模块包里。
 package server
 
 import (
@@ -21,16 +21,12 @@ import (
 	"github.com/jasper0507/what-to-eat/internal/account"
 	"github.com/jasper0507/what-to-eat/internal/catalog"
 	"github.com/jasper0507/what-to-eat/internal/meal"
-	"github.com/jasper0507/what-to-eat/internal/onboarding"
 	"github.com/jasper0507/what-to-eat/internal/pool"
 	"github.com/jasper0507/what-to-eat/internal/schema"
 )
 
 // 模块配置以别名形式出现在公共 Config 上，调用方无需 import 模块包。
-type (
-	DiscoveryConfig = meal.DiscoveryConfig
-	NIMConfig       = onboarding.NIMConfig
-)
+type DiscoveryConfig = meal.DiscoveryConfig
 
 func DefaultDiscoveryConfig() DiscoveryConfig {
 	return meal.DefaultDiscoveryConfig()
@@ -43,22 +39,15 @@ type Config struct {
 	WebDir        string
 	CatalogDir    string
 	Discovery     *DiscoveryConfig
-	NIM           *NIMConfig
 }
 
 // ConfigFromEnv 从环境变量组装 Config，未设置的项使用默认值。
-// APP_ENV=production 同时启用 SecureCookies 与 NIM.Required。
-// Discovery 阈值经 DISCOVERY_* 覆盖，NIM 超时经 NIM_TIMEOUT（如 "15s"）。
+// APP_ENV=production 同时启用 SecureCookies。
+// Discovery 阈值经 DISCOVERY_* 覆盖。
 func ConfigFromEnv() (Config, error) {
 	production := os.Getenv("APP_ENV") == "production"
 
 	discovery := DefaultDiscoveryConfig()
-	nim := NIMConfig{
-		APIKey:   os.Getenv("NVIDIA_API_KEY"),
-		BaseURL:  os.Getenv("NIM_BASE_URL"),
-		Model:    os.Getenv("NIM_MODEL"),
-		Required: production,
-	}
 	for name, apply := range map[string]func(string) error{
 		"DISCOVERY_ENABLED": func(value string) (err error) {
 			discovery.Enabled, err = strconv.ParseBool(value)
@@ -69,10 +58,6 @@ func ConfigFromEnv() (Config, error) {
 		"DISCOVERY_MIN_REROLLS":              envInt(&discovery.MinRerolls),
 		"DISCOVERY_RECENT_MEAL_WINDOW":       envInt(&discovery.RecentMealWindow),
 		"DISCOVERY_MAX_DISCOVERIES_PER_MEAL": envInt(&discovery.MaxDiscoveriesPerMeal),
-		"NIM_TIMEOUT": func(value string) (err error) {
-			nim.Timeout, err = time.ParseDuration(value)
-			return err
-		},
 	} {
 		value := os.Getenv(name)
 		if value == "" {
@@ -90,7 +75,6 @@ func ConfigFromEnv() (Config, error) {
 		WebDir:        envOrDefault("WEB_DIR", "frontend/dist"),
 		CatalogDir:    os.Getenv("CATALOG_DIR"),
 		Discovery:     &discovery,
-		NIM:           &nim,
 	}, nil
 }
 
@@ -116,22 +100,13 @@ type App struct {
 	pool          *pool.Pool
 	catalog       *catalog.Catalog
 	meals         *meal.Lifecycle
-	onboarding    *onboarding.Interview
 }
 
 func New(config Config) (*App, error) {
-	nim, err := onboarding.NewNIMAdapter(config.NIM)
-	if err != nil {
-		return nil, fmt.Errorf("configure NVIDIA NIM: %w", err)
-	}
-	return newApp(config, meal.NewDecisionRandom(), nim)
+	return newApp(config, meal.NewDecisionRandom())
 }
 
-func newApp(
-	config Config,
-	decisionRandom *mathrand.Rand,
-	nim onboarding.NIM,
-) (*App, error) {
+func newApp(config Config, decisionRandom *mathrand.Rand) (*App, error) {
 	if config.DatabasePath == "" {
 		return nil, errors.New("DatabasePath is required")
 	}
@@ -173,7 +148,6 @@ func newApp(
 		pool:          candidates,
 		catalog:       catalog.New(db),
 		meals:         meal.New(db, candidates, decisionRandom, discovery),
-		onboarding:    onboarding.NewInterview(db, candidates, nim),
 	}
 	app.routes(config.WebDir, config.CatalogDir)
 	return app, nil
@@ -197,10 +171,6 @@ func (a *App) routes(webDir, catalogDir string) {
 	authorized.POST("/candidate-pool/dishes", a.addCandidatePoolDish)
 	authorized.PATCH("/candidate-pool/dishes", a.updateCandidatePoolDish)
 	authorized.DELETE("/candidate-pool/dishes", a.removeCandidatePoolDish)
-	authorized.GET("/onboarding/interview", a.getOnboardingInterview)
-	authorized.POST("/onboarding/interview/messages", a.sendOnboardingMessage)
-	authorized.POST("/onboarding/interview/retry", a.retryOnboardingInterview)
-	authorized.POST("/onboarding/interview/manual", a.useManualOnboarding)
 	authorized.GET("/meals/resume", a.resumeMeal)
 	authorized.POST("/meals", a.beginMeal)
 	authorized.POST("/meals/abandon", a.abandonMeal)

@@ -12,8 +12,6 @@
   解释命名卷的创建和复用。用于理解为什么重建容器后 SQLite 数据应继续存在。
 - [Chrome Device Mode 官方文档](https://developer.chrome.com/docs/devtools/device-mode)
   说明移动视口模拟及其局限。用于桌面预检，不能替代最后的真机验收。
-- [NVIDIA NIM LLM API 参考](https://docs.nvidia.com/nim/large-language-models/latest/reference/api-reference.html)
-  NIM 的 OpenAI 兼容聊天接口参考。用于判断 Onboarding 是否真正穿过服务端集成边界。
 - [MDN `Set-Cookie` 参考](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Set-Cookie)
   解释 `Secure`、`HttpOnly` 和 `SameSite`。用于检查生产 Cookie 及 HTTPS 前置条件。
 

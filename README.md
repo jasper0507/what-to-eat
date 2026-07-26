@@ -35,17 +35,6 @@ npm run test:browser  # Playwright 全栈验收（自动构建并启动真实 Go
 健康检查可能不识别 `127.*` 通配写法而走代理导致 502。此时用
 `NO_PROXY="127.0.0.1,localhost" npm run test:browser` 运行。
 
-## NVIDIA NIM Onboarding
-
-Onboarding interview 只由 Go 服务调用 NVIDIA NIM；API key 不会进入前端构建。启动 API 前设置：
-
-```bash
-export NVIDIA_API_KEY="..."
-go run ./cmd/server
-```
-
-默认使用 `https://integrate.api.nvidia.com/v1` 和 `meta/llama-3.1-8b-instruct`。自托管 NIM 可通过 `NIM_BASE_URL` 和 `NIM_MODEL` 覆盖。未配置或 NIM 暂时失败时，访谈页面允许重试，或转到手工 Catalog 搜索与 Candidate pool 编辑。
-
 ## 导入 HowToCook Catalog
 
 服务启动时可从 HowToCook 的 `dishes` 目录重复导入 Catalog；同一路径始终得到同一 Dish 身份，已有条目会更新名称、Recipe 和分类信息。
@@ -63,13 +52,13 @@ Discovery pressure 的三个透明信号分别是 Candidate pool 不超过 3 道
 
 嵌入应用时可从 `server.DefaultDiscoveryConfig()` 取得默认值，通过 `server.Config.Discovery` 调整阈值或关闭 Discovery。
 
-部署时同一组阈值可经环境变量覆盖，无需重编译：`DISCOVERY_ENABLED`、`DISCOVERY_MAX_POOL_SIZE`、`DISCOVERY_MAX_ELIGIBLE_DISHES`、`DISCOVERY_MIN_REROLLS`、`DISCOVERY_REQUIRED_SIGNALS`、`DISCOVERY_RECENT_MEAL_WINDOW`、`DISCOVERY_MAX_DISCOVERIES_PER_MEAL`；NIM 请求超时经 `NIM_TIMEOUT`（如 `15s`）。
+部署时同一组阈值可经环境变量覆盖，无需重编译：`DISCOVERY_ENABLED`、`DISCOVERY_MAX_POOL_SIZE`、`DISCOVERY_MAX_ELIGIBLE_DISHES`、`DISCOVERY_MIN_REROLLS`、`DISCOVERY_REQUIRED_SIGNALS`、`DISCOVERY_RECENT_MEAL_WINDOW`、`DISCOVERY_MAX_DISCOVERIES_PER_MEAL`。
 
 ## 单节点运行
 
 ```bash
 install -m 600 .env.example .env
-# 编辑 .env，填入 NVIDIA_API_KEY，并把 SESSION_SECRET 换成至少 32 字节的随机值：
+# 编辑 .env，把 SESSION_SECRET 换成至少 32 字节的随机值：
 # openssl rand -base64 32
 docker compose up --build -d
 docker compose ps
@@ -81,8 +70,8 @@ docker compose ps
 `what_to_eat_data` 中。生产会话 Cookie 启用 `Secure`、`HttpOnly` 和
 `SameSite=Lax`，因此浏览器访问应由同机反向代理提供 HTTPS。
 
-`SESSION_SECRET` 和 `NVIDIA_API_KEY` 缺失时 Compose 会直接拒绝启动；
-会话秘密短于 32 字节、NIM 配置无效或 SQLite 卷不可写时，应用会输出明确错误并退出。
+`SESSION_SECRET` 缺失时 Compose 会直接拒绝启动；
+会话秘密短于 32 字节或 SQLite 卷不可写时，应用会输出明确错误并退出。
 不要把 `.env` 加入镜像或版本库。
 
 ## 备份与恢复

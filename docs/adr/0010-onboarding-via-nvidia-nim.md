@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Superseded by [ADR-0023](0023-taste-interview-abolished.md) (2026-07-27: the AI taste interview was abolished entirely; onboarding is starter pack + manual pool edits, with no LLM anywhere in the product)
 
 ## Context
 
