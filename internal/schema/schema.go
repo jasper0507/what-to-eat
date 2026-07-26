@@ -18,6 +18,10 @@ var migrations = []struct {
 	{"Reroll", migrateRerollSchema},
 	{"Discovery", migrateDiscoverySchema},
 	{"Pending rating", migratePendingRatingSchema},
+	{"Taste tier", migrateTasteTierSchema},
+	{"Meal outcomes", migrateMealOutcomesSchema},
+	{"Catalog enrichment", migrateCatalogEnrichmentSchema},
+	{"Pool demotion", migratePoolDemotionSchema},
 }
 
 // Migrate 按序执行 schema 台账；任何一张表长什么样，读本文件即可回答。
@@ -37,7 +41,7 @@ func decisionsTableDDL(create, table string) string {
 		id INTEGER PRIMARY KEY,
 		meal_id INTEGER NOT NULL REFERENCES meals(id) ON DELETE CASCADE,
 		dish_id TEXT NOT NULL REFERENCES catalog_dishes(source_path),
-		mode TEXT NOT NULL CHECK (mode IN ('pool', 'discovery')),
+		mode TEXT NOT NULL CHECK (mode IN ('pool', 'discovery', 'hand_pick')),
 		reason TEXT NOT NULL DEFAULT '',
 		status TEXT NOT NULL CHECK (status IN ('active', 'accepted')),
 		rerolled_to_id INTEGER REFERENCES ` + table + `(id),
@@ -67,9 +71,7 @@ func applyBaseSchema(db *sql.DB) error {
 		CREATE TABLE IF NOT EXISTS candidate_pool (
 			account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
 			dish_id TEXT NOT NULL REFERENCES catalog_dishes(source_path) ON DELETE CASCADE,
-			preference_weight REAL NOT NULL CHECK (
-				preference_weight >= 0.1 AND preference_weight <= 5
-			),
+			tier INTEGER NOT NULL CHECK (tier IN (3, 4, 5)),
 			PRIMARY KEY (account_id, dish_id)
 		);
 		CREATE TABLE IF NOT EXISTS onboarding_interviews (
@@ -92,7 +94,7 @@ func applyBaseSchema(db *sql.DB) error {
 		CREATE TABLE IF NOT EXISTS meals (
 			id INTEGER PRIMARY KEY,
 			account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
-			status TEXT NOT NULL CHECK (status IN ('active', 'accepted')),
+			status TEXT NOT NULL CHECK (status IN ('active', 'accepted', 'abandoned')),
 			created_at INTEGER NOT NULL
 		);
 		CREATE UNIQUE INDEX IF NOT EXISTS one_active_meal_per_account
@@ -256,6 +258,191 @@ func migrateDiscoverySchema(db *sql.DB) (err error) {
 		return errors.New("Discovery migration left invalid foreign keys")
 	}
 	return rows.Err()
+}
+
+// migrateTasteTierSchema 把 candidate_pool 的连续 preference_weight 重建为
+// Taste rating 上三档（3 人上人 / 4 顶尖 / 5 夯）。回填映射覆盖旧评分派生值
+// （0.7/1.0/1.3）与手工权重：<0.85→3、<1.15→4、其余→5（ADR-0022）。
+func migrateTasteTierSchema(db *sql.DB) error {
+	var hasWeight bool
+	if err := db.QueryRow(`
+		SELECT EXISTS(
+			SELECT 1 FROM pragma_table_info('candidate_pool')
+			WHERE name = 'preference_weight'
+		)
+	`).Scan(&hasWeight); err != nil {
+		return err
+	}
+	if !hasWeight {
+		return nil
+	}
+
+	transaction, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer transaction.Rollback()
+	if _, err := transaction.Exec(`
+		CREATE TABLE candidate_pool_next (
+			account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+			dish_id TEXT NOT NULL REFERENCES catalog_dishes(source_path) ON DELETE CASCADE,
+			tier INTEGER NOT NULL CHECK (tier IN (3, 4, 5)),
+			PRIMARY KEY (account_id, dish_id)
+		);
+		INSERT INTO candidate_pool_next (account_id, dish_id, tier)
+			SELECT account_id, dish_id,
+			       CASE
+				WHEN preference_weight < 0.85 THEN 3
+				WHEN preference_weight < 1.15 THEN 4
+				ELSE 5
+			       END
+			FROM candidate_pool;
+		DROP TABLE candidate_pool;
+		ALTER TABLE candidate_pool_next RENAME TO candidate_pool;
+	`); err != nil {
+		return err
+	}
+	return transaction.Commit()
+}
+
+// migrateMealOutcomesSchema 扩状态机：meals 增加 abandoned 结局、decisions
+// 增加 hand_pick 模式（ADR-0022 的三出口）。两张表需按 SQLite 十二步法重建。
+func migrateMealOutcomesSchema(db *sql.DB) (err error) {
+	var mealsSQL, decisionsSQL string
+	if err := db.QueryRow(
+		"SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'meals'",
+	).Scan(&mealsSQL); err != nil {
+		return err
+	}
+	if err := db.QueryRow(
+		"SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'decisions'",
+	).Scan(&decisionsSQL); err != nil {
+		return err
+	}
+	needMeals := !strings.Contains(mealsSQL, "'abandoned'")
+	needDecisions := !strings.Contains(decisionsSQL, "'hand_pick'")
+	if !needMeals && !needDecisions {
+		return nil
+	}
+
+	if _, err := db.Exec("PRAGMA foreign_keys = OFF"); err != nil {
+		return err
+	}
+	foreignKeysDisabled := true
+	defer func() {
+		if foreignKeysDisabled {
+			_, restoreErr := db.Exec("PRAGMA foreign_keys = ON")
+			err = errors.Join(err, restoreErr)
+		}
+	}()
+
+	transaction, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer transaction.Rollback()
+	if needMeals {
+		if _, err := transaction.Exec(`
+			CREATE TABLE meals_next (
+				id INTEGER PRIMARY KEY,
+				account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+				status TEXT NOT NULL CHECK (status IN ('active', 'accepted', 'abandoned')),
+				created_at INTEGER NOT NULL
+			);
+			INSERT INTO meals_next (id, account_id, status, created_at)
+				SELECT id, account_id, status, created_at FROM meals;
+			DROP TABLE meals;
+			ALTER TABLE meals_next RENAME TO meals;
+			CREATE UNIQUE INDEX one_active_meal_per_account
+				ON meals(account_id) WHERE status = 'active';
+		`); err != nil {
+			return err
+		}
+	}
+	if needDecisions {
+		if _, err := transaction.Exec(
+			decisionsTableDDL("decisions_next", "decisions_next"),
+		); err != nil {
+			return err
+		}
+		if _, err := transaction.Exec(`
+			INSERT INTO decisions_next (
+				id, meal_id, dish_id, mode, reason, status, rerolled_to_id, created_at
+			)
+			SELECT id, meal_id, dish_id, mode, reason, status, rerolled_to_id, created_at
+			FROM decisions;
+			DROP TABLE decisions;
+			ALTER TABLE decisions_next RENAME TO decisions;
+			CREATE UNIQUE INDEX one_active_decision_per_meal
+				ON decisions(meal_id)
+				WHERE status = 'active' AND rerolled_to_id IS NULL;
+		`); err != nil {
+			return err
+		}
+	}
+	if err := transaction.Commit(); err != nil {
+		return err
+	}
+	if _, err := db.Exec("PRAGMA foreign_keys = ON"); err != nil {
+		return err
+	}
+	foreignKeysDisabled = false
+	rows, err := db.Query("PRAGMA foreign_key_check")
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	if rows.Next() {
+		return errors.New("Meal outcomes migration left invalid foreign keys")
+	}
+	return rows.Err()
+}
+
+// migrateCatalogEnrichmentSchema 给 catalog_dishes 追加导入富化列：Taste
+// profile 三维（JSON 数组）与揭示/菜谱页要用的元数据（ADR-0022）。
+func migrateCatalogEnrichmentSchema(db *sql.DB) error {
+	columns := []struct{ name, definition string }{
+		{"ingredients", "TEXT NOT NULL DEFAULT '[]'"},
+		{"flavors", "TEXT NOT NULL DEFAULT '[]'"},
+		{"techniques", "TEXT NOT NULL DEFAULT '[]'"},
+		{"images", "TEXT NOT NULL DEFAULT '[]'"},
+		{"difficulty", "INTEGER"},
+		{"calories", "INTEGER"},
+		{"cook_minutes", "INTEGER"},
+	}
+	for _, column := range columns {
+		var exists bool
+		if err := db.QueryRow(`
+			SELECT EXISTS(
+				SELECT 1 FROM pragma_table_info('catalog_dishes') WHERE name = ?
+			)
+		`, column.name).Scan(&exists); err != nil {
+			return err
+		}
+		if exists {
+			continue
+		}
+		if _, err := db.Exec(
+			"ALTER TABLE catalog_dishes ADD COLUMN " + column.name + " " + column.definition,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// migratePoolDemotionSchema 建自动降档的连换计数表（ADR-0022：被换 +1、
+// 被接受清零、达 4 降一档并清零）。
+func migratePoolDemotionSchema(db *sql.DB) error {
+	_, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS pool_demotions (
+			account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+			dish_id TEXT NOT NULL REFERENCES catalog_dishes(source_path) ON DELETE CASCADE,
+			swaps INTEGER NOT NULL DEFAULT 0 CHECK (swaps >= 0),
+			PRIMARY KEY (account_id, dish_id)
+		);
+	`)
+	return err
 }
 
 func migratePendingRatingSchema(db *sql.DB) error {

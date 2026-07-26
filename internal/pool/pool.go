@@ -11,17 +11,7 @@ import (
 	"github.com/jasper0507/what-to-eat/internal/catalog"
 )
 
-// Preference weight 的合法域，唯一来源；schema CHECK 仅作存储层兜底。
-const (
-	MinPreferenceWeight = 0.1
-	MaxPreferenceWeight = 5
-)
-
 var ErrDishRejected = errors.New("Dish carries a rejection mark")
-
-func ValidWeight(weight float64) bool {
-	return weight >= MinPreferenceWeight && weight <= MaxPreferenceWeight
-}
 
 type Pool struct {
 	db *sql.DB
@@ -31,10 +21,11 @@ func New(db *sql.DB) *Pool {
 	return &Pool{db: db}
 }
 
-// Member 是池成员视图：Catalog Dish 加上 Eater 的 Preference weight。
+// Member 是池成员视图：Catalog Dish 加上 Eater 的档位（3 人上人 / 4 顶尖 /
+// 5 夯）。数字权重是引擎内部实现，wire 只说档位语言（ADR-0022）。
 type Member struct {
 	catalog.Dish
-	PreferenceWeight float64 `json:"preference_weight"`
+	Tier int `json:"tier"`
 }
 
 func (p *Pool) List(
@@ -43,7 +34,7 @@ func (p *Pool) List(
 ) ([]Member, error) {
 	rows, err := p.db.QueryContext(
 		context,
-		`SELECT catalog_dishes.source_path, catalog_dishes.name, candidate_pool.preference_weight
+		`SELECT catalog_dishes.source_path, catalog_dishes.name, candidate_pool.tier
 		 FROM candidate_pool
 		 JOIN catalog_dishes ON catalog_dishes.source_path = candidate_pool.dish_id
 		 WHERE candidate_pool.account_id = ?
@@ -58,13 +49,13 @@ func (p *Pool) List(
 	dishes := make([]Member, 0)
 	for rows.Next() {
 		var sourcePath, name string
-		var weight float64
-		if err := rows.Scan(&sourcePath, &name, &weight); err != nil {
+		var tier int
+		if err := rows.Scan(&sourcePath, &name, &tier); err != nil {
 			return nil, err
 		}
 		dishes = append(dishes, Member{
-			Dish:             catalog.NewDish(sourcePath, name),
-			PreferenceWeight: weight,
+			Dish: catalog.NewDish(sourcePath, name),
+			Tier: tier,
 		})
 	}
 	return dishes, rows.Err()
@@ -78,7 +69,7 @@ func (p *Pool) Add(
 	context context.Context,
 	accountID int64,
 	dishID string,
-	weight float64,
+	tier int,
 ) (added bool, err error) {
 	transaction, err := p.db.BeginTx(context, nil)
 	if err != nil {
@@ -102,13 +93,13 @@ func (p *Pool) Add(
 
 	insertResult, err := transaction.ExecContext(
 		context,
-		`INSERT INTO candidate_pool (account_id, dish_id, preference_weight)
+		`INSERT INTO candidate_pool (account_id, dish_id, tier)
 		 SELECT ?, source_path, ?
 		 FROM catalog_dishes
 		 WHERE source_path = ?
 		 ON CONFLICT(account_id, dish_id) DO NOTHING`,
 		accountID,
-		weight,
+		tier,
 		dishID,
 	)
 	if err != nil {
@@ -124,18 +115,18 @@ func (p *Pool) Add(
 	return true, transaction.Commit()
 }
 
-func (p *Pool) UpdateWeight(
+func (p *Pool) UpdateTier(
 	context context.Context,
 	accountID int64,
 	dishID string,
-	weight float64,
+	tier int,
 ) (found bool, err error) {
 	result, err := p.db.ExecContext(
 		context,
 		`UPDATE candidate_pool
-		 SET preference_weight = ?
+		 SET tier = ?
 		 WHERE account_id = ? AND dish_id = ?`,
-		weight,
+		tier,
 		accountID,
 		dishID,
 	)
@@ -164,14 +155,14 @@ func (p *Pool) Remove(
 	return affected > 0, err
 }
 
-// Admit 在调用方事务内执行 pool admission。评分派生的 weight 覆盖已有值：
+// Admit 在调用方事务内执行 pool admission。评分派生的档位覆盖已有值：
 // Taste rating 是最新的真实进食信号。带 rejection mark 的 Dish 不可接纳。
 func (p *Pool) Admit(
 	context context.Context,
 	transaction *sql.Tx,
 	accountID int64,
 	dishID string,
-	weight float64,
+	tier int,
 ) error {
 	var rejected bool
 	if err := transaction.QueryRowContext(
@@ -191,13 +182,13 @@ func (p *Pool) Admit(
 	}
 	_, err := transaction.ExecContext(
 		context,
-		`INSERT INTO candidate_pool (account_id, dish_id, preference_weight)
+		`INSERT INTO candidate_pool (account_id, dish_id, tier)
 		 VALUES (?, ?, ?)
 		 ON CONFLICT(account_id, dish_id)
-		 DO UPDATE SET preference_weight = excluded.preference_weight`,
+		 DO UPDATE SET tier = excluded.tier`,
 		accountID,
 		dishID,
-		weight,
+		tier,
 	)
 	return err
 }

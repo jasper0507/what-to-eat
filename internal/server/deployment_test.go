@@ -16,10 +16,7 @@ func TestSQLiteBackupRestoresEntireEaterJourneyState(t *testing.T) {
 	sessionCookie := registerCandidateEater(t, app, "restored_eater")
 	addCandidatePoolDish(t, app, sessionCookie, "vegetable_dish/番茄炒蛋.md", 5)
 
-	decision := beginMealDecision(t, app, sessionCookie)
-	if decision.Mode != "discovery" {
-		t.Fatalf("Decision mode = %q, want discovery", decision.Mode)
-	}
+	decision := beginDiscoveryDecision(t, app, sessionCookie)
 	accepted := acceptDecisionResult(t, app, sessionCookie, decision)
 	if accepted.EatingRecord.Sequence != 1 || accepted.PendingRating == nil {
 		t.Fatalf("Acceptance = %#v, want first Eating record and Pending rating", accepted)

@@ -18,7 +18,9 @@ import { PageHeader } from "@/components/PageHeader";
 import { WeightControl } from "@/components/WeightControl";
 import { copy } from "@/lib/copy";
 import { pageEnter, springSnappy } from "@/lib/motion";
-import { DEFAULT_ADD_WEIGHT } from "@/lib/ratings";
+
+// 手工入池默认顶尖（4）；入池场景只开上三档（ADR-0022）
+const DEFAULT_ADD_TIER = 4 as const;
 
 const rowEnter = (index: number) => ({
   initial: { opacity: 0, y: 12 },
@@ -48,7 +50,7 @@ export default function CandidatePoolPage() {
           dish={dish}
           disabled={poolBusy}
           onCommit={(value) =>
-            updateWeight.mutate({ dish_id: dish.id, preference_weight: value })
+            updateWeight.mutate({ dish_id: dish.id, tier: value })
           }
         />
         <div className="dish-row-actions">
@@ -84,7 +86,7 @@ export default function CandidatePoolPage() {
               disabled={inPool || (addDish.isPending && !adding)}
               onClick={() =>
                 addDish.mutate(
-                  { dish_id: dish.id, preference_weight: DEFAULT_ADD_WEIGHT },
+                  { dish_id: dish.id, tier: DEFAULT_ADD_TIER },
                   {
                     onSuccess: () => {
                       void message.success(copy.pool.addedToast);

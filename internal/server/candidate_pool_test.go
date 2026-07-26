@@ -12,12 +12,12 @@ import (
 )
 
 type candidateDish struct {
-	ID               string   `json:"id"`
-	Name             string   `json:"name"`
-	Category         string   `json:"category"`
-	RecipePath       string   `json:"recipe_path"`
-	Tags             []string `json:"tags"`
-	PreferenceWeight float64  `json:"preference_weight"`
+	ID         string   `json:"id"`
+	Name       string   `json:"name"`
+	Category   string   `json:"category"`
+	RecipePath string   `json:"recipe_path"`
+	Tags       []string `json:"tags"`
+	Tier       int      `json:"tier"`
 }
 
 func candidatePoolRequest(
@@ -70,7 +70,7 @@ func TestEaterCanAddCatalogDishToCandidatePool(t *testing.T) {
 		app,
 		http.MethodPost,
 		"/api/candidate-pool/dishes",
-		`{"dish_id":"vegetable_dish/番茄炒蛋.md","preference_weight":1.4}`,
+		`{"dish_id":"vegetable_dish/番茄炒蛋.md","tier":4}`,
 		sessionCookie,
 	)
 	if addResponse.Code != http.StatusCreated {
@@ -105,12 +105,12 @@ func TestEaterCanAddCatalogDishToCandidatePool(t *testing.T) {
 		dish.Name != "番茄炒蛋" ||
 		dish.Category != "素菜" ||
 		dish.RecipePath != dish.ID ||
-		dish.PreferenceWeight != 1.4 {
-		t.Errorf("dish = %#v, want 番茄炒蛋 with weight 1.4", dish)
+		dish.Tier != 4 {
+		t.Errorf("dish = %#v, want 番茄炒蛋 at 顶尖", dish)
 	}
 }
 
-func TestPreferenceWeightPersistsAfterRelogin(t *testing.T) {
+func TestTierPersistsAfterRelogin(t *testing.T) {
 	databasePath := filepath.Join(t.TempDir(), "what-to-eat.db")
 	app := openCatalogApp(t, databasePath)
 	sessionCookie := registerCatalogEater(t, app)
@@ -120,7 +120,7 @@ func TestPreferenceWeightPersistsAfterRelogin(t *testing.T) {
 		app,
 		http.MethodPost,
 		"/api/candidate-pool/dishes",
-		`{"dish_id":"meat_dish/番茄牛腩.md","preference_weight":1}`,
+		`{"dish_id":"meat_dish/番茄牛腩.md","tier":4}`,
 		sessionCookie,
 	)
 	if addResponse.Code != http.StatusCreated {
@@ -131,7 +131,7 @@ func TestPreferenceWeightPersistsAfterRelogin(t *testing.T) {
 		app,
 		http.MethodPatch,
 		"/api/candidate-pool/dishes",
-		`{"dish_id":"meat_dish/番茄牛腩.md","preference_weight":2.2}`,
+		`{"dish_id":"meat_dish/番茄牛腩.md","tier":5}`,
 		sessionCookie,
 	)
 	if updateResponse.Code != http.StatusNoContent {
@@ -175,8 +175,8 @@ func TestPreferenceWeightPersistsAfterRelogin(t *testing.T) {
 	if err := json.NewDecoder(listResponse.Body).Decode(&result); err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Dishes) != 1 || result.Dishes[0].PreferenceWeight != 2.2 {
-		t.Errorf("dishes after relogin = %#v, want weight 2.2", result.Dishes)
+	if len(result.Dishes) != 1 || result.Dishes[0].Tier != 5 {
+		t.Errorf("dishes after relogin = %#v, want 夯", result.Dishes)
 	}
 }
 
@@ -191,7 +191,7 @@ func TestEaterCanRemoveDishFromCandidatePool(t *testing.T) {
 		app,
 		http.MethodPost,
 		"/api/candidate-pool/dishes",
-		`{"dish_id":"drink/柠檬水.md","preference_weight":1}`,
+		`{"dish_id":"drink/柠檬水.md","tier":4}`,
 		sessionCookie,
 	)
 	if addResponse.Code != http.StatusCreated {
@@ -239,7 +239,7 @@ func TestCandidatePoolIsIsolatedByAccount(t *testing.T) {
 		app,
 		http.MethodPost,
 		"/api/candidate-pool/dishes",
-		`{"dish_id":"vegetable_dish/番茄炒蛋.md","preference_weight":1.4}`,
+		`{"dish_id":"vegetable_dish/番茄炒蛋.md","tier":4}`,
 		firstCookie,
 	)
 	if addResponse.Code != http.StatusCreated {
@@ -263,7 +263,7 @@ func TestCandidatePoolIsIsolatedByAccount(t *testing.T) {
 		app,
 		http.MethodPatch,
 		"/api/candidate-pool/dishes?account_id=1",
-		`{"dish_id":"vegetable_dish/番茄炒蛋.md","preference_weight":5}`,
+		`{"dish_id":"vegetable_dish/番茄炒蛋.md","tier":5}`,
 		secondCookie,
 	)
 	if secondUpdate.Code != http.StatusNotFound {
@@ -296,8 +296,8 @@ func TestCandidatePoolIsIsolatedByAccount(t *testing.T) {
 	if err := json.NewDecoder(firstList.Body).Decode(&result); err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Dishes) != 1 || result.Dishes[0].PreferenceWeight != 1.4 {
-		t.Errorf("first Account dishes = %#v, want unchanged weight 1.4", result.Dishes)
+	if len(result.Dishes) != 1 || result.Dishes[0].Tier != 4 {
+		t.Errorf("first Account dishes = %#v, want unchanged 顶尖", result.Dishes)
 	}
 }
 
@@ -311,7 +311,7 @@ func TestCandidatePoolRejectsInvalidOrUnavailableDish(t *testing.T) {
 		app,
 		http.MethodPost,
 		"/api/candidate-pool/dishes",
-		`{"dish_id":"","preference_weight":1}`,
+		`{"dish_id":"","tier":4}`,
 		sessionCookie,
 	)
 	if invalid.Code != http.StatusBadRequest {
@@ -344,18 +344,44 @@ func TestCandidatePoolRejectsInvalidOrUnavailableDish(t *testing.T) {
 		}
 	}
 
-	assertUnavailable(`{"dish_id":"vegetable_dish/不存在.md","preference_weight":1}`)
+	// 入池只开上三档：下两档只存在于评分侧
+	lowTier := candidatePoolRequest(
+		t,
+		app,
+		http.MethodPost,
+		"/api/candidate-pool/dishes",
+		`{"dish_id":"vegetable_dish/番茄炒蛋.md","tier":2}`,
+		sessionCookie,
+	)
+	if lowTier.Code != http.StatusBadRequest {
+		t.Errorf("low tier status = %d, want %d", lowTier.Code, http.StatusBadRequest)
+	}
+
+	assertUnavailable(`{"dish_id":"vegetable_dish/不存在.md","tier":4}`)
 
 	addResponse := candidatePoolRequest(
 		t,
 		app,
 		http.MethodPost,
 		"/api/candidate-pool/dishes",
-		`{"dish_id":"vegetable_dish/番茄炒蛋.md","preference_weight":1}`,
+		`{"dish_id":"vegetable_dish/番茄炒蛋.md","tier":4}`,
 		sessionCookie,
 	)
 	if addResponse.Code != http.StatusCreated {
 		t.Fatalf("add status = %d, want %d; body = %s", addResponse.Code, http.StatusCreated, addResponse.Body)
 	}
-	assertUnavailable(`{"dish_id":"vegetable_dish/番茄炒蛋.md","preference_weight":1}`)
+	assertUnavailable(`{"dish_id":"vegetable_dish/番茄炒蛋.md","tier":4}`)
+
+	// 过渡垫片：v2 旧前端的 preference_weight 仍按档位映射折算（第 2 段移除）
+	legacy := candidatePoolRequest(
+		t,
+		app,
+		http.MethodPost,
+		"/api/candidate-pool/dishes",
+		`{"dish_id":"meat_dish/番茄牛腩.md","preference_weight":1.4}`,
+		sessionCookie,
+	)
+	if legacy.Code != http.StatusCreated {
+		t.Fatalf("legacy add status = %d, want %d; body = %s", legacy.Code, http.StatusCreated, legacy.Body)
+	}
 }

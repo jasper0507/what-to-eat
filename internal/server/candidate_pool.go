@@ -6,12 +6,31 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/jasper0507/what-to-eat/internal/catalog"
-	"github.com/jasper0507/what-to-eat/internal/pool"
+	"github.com/jasper0507/what-to-eat/internal/engine"
 )
 
+// candidateDishInput 的 wire 契约是档位（tier 3/4/5，入池只开上三档）。
+// preference_weight 是 v2 前端的过渡垫片（第 2 段铺开时移除）：老页面还在
+// 发连续权重，按 Taste tier 迁移的同一映射折档。
 type candidateDishInput struct {
-	DishID           string  `json:"dish_id"`
-	PreferenceWeight float64 `json:"preference_weight"`
+	DishID           string   `json:"dish_id"`
+	Tier             int      `json:"tier"`
+	PreferenceWeight *float64 `json:"preference_weight"`
+}
+
+func (input candidateDishInput) resolvedTier() int {
+	if input.Tier != 0 || input.PreferenceWeight == nil {
+		return input.Tier
+	}
+	weight := *input.PreferenceWeight
+	switch {
+	case weight < 0.85:
+		return engine.TierRenShangRen
+	case weight < 1.15:
+		return engine.TierDingJian
+	default:
+		return engine.TierHang
+	}
 }
 
 func (a *App) listCandidatePool(context *gin.Context) {
@@ -30,12 +49,12 @@ func (a *App) addCandidatePoolDish(context *gin.Context) {
 	var input candidateDishInput
 	if err := context.ShouldBindJSON(&input); err != nil ||
 		!catalog.ValidDishID(input.DishID) ||
-		!pool.ValidWeight(input.PreferenceWeight) {
-		writeError(context, http.StatusBadRequest, codeInvalidRequest, "Dish 或 Preference weight 无效")
+		!engine.ValidTier(input.resolvedTier()) {
+		writeError(context, http.StatusBadRequest, codeInvalidRequest, "Dish 或档位无效")
 		return
 	}
 
-	added, err := a.pool.Add(context, owner.ID, input.DishID, input.PreferenceWeight)
+	added, err := a.pool.Add(context, owner.ID, input.DishID, input.resolvedTier())
 	if err != nil {
 		writeInternalError(context, "add Candidate pool member", err)
 		return
@@ -53,12 +72,12 @@ func (a *App) updateCandidatePoolDish(context *gin.Context) {
 	var input candidateDishInput
 	if err := context.ShouldBindJSON(&input); err != nil ||
 		!catalog.ValidDishID(input.DishID) ||
-		!pool.ValidWeight(input.PreferenceWeight) {
-		writeError(context, http.StatusBadRequest, codeInvalidRequest, "Dish 或 Preference weight 无效")
+		!engine.ValidTier(input.resolvedTier()) {
+		writeError(context, http.StatusBadRequest, codeInvalidRequest, "Dish 或档位无效")
 		return
 	}
 
-	found, err := a.pool.UpdateWeight(context, owner.ID, input.DishID, input.PreferenceWeight)
+	found, err := a.pool.UpdateTier(context, owner.ID, input.DishID, input.resolvedTier())
 	if err != nil {
 		writeInternalError(context, "update Candidate pool member", err)
 		return

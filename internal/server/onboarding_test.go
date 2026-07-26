@@ -139,13 +139,14 @@ func TestOnboardingInterviewRestoresProgressAndBuildsCandidatePool(t *testing.T)
 	if len(result.Dishes) != 2 {
 		t.Fatalf("Candidate pool = %#v, want only two stable Catalog dishes", result.Dishes)
 	}
-	weights := map[string]float64{}
+	// NIM 连续权重经过渡垫片折档：5 → 夯、3.5 → 顶尖
+	tiers := map[string]int{}
 	for _, dish := range result.Dishes {
-		weights[dish.ID] = dish.PreferenceWeight
+		tiers[dish.ID] = dish.Tier
 	}
-	if weights["vegetable_dish/番茄炒蛋.md"] != 5 ||
-		weights["meat_dish/番茄牛腩.md"] != 3.5 {
-		t.Errorf("Candidate pool weights = %#v, want stable Catalog IDs with NIM weights", weights)
+	if tiers["vegetable_dish/番茄炒蛋.md"] != 5 ||
+		tiers["meat_dish/番茄牛腩.md"] != 4 {
+		t.Errorf("Candidate pool tiers = %#v, want stable Catalog IDs with mapped tiers", tiers)
 	}
 }
 
@@ -486,7 +487,6 @@ func TestOnboardingSkipsRejectionMarkedDish(t *testing.T) {
 			MaxPoolSize:           1,
 			MaxEligibleDishes:     1,
 			MinRerolls:            2,
-			RequiredSignals:       2,
 			RecentMealWindow:      3,
 			MaxDiscoveriesPerMeal: 2,
 		},
@@ -522,10 +522,7 @@ func TestOnboardingSkipsRejectionMarkedDish(t *testing.T) {
 	sendMessage("我随便吃点，你推荐吧")
 
 	addCandidatePoolDish(t, app, cookie, "vegetable_dish/番茄炒蛋.md", 5)
-	discovery := beginMealDecision(t, app, cookie)
-	if discovery.Mode != "discovery" {
-		t.Fatalf("Decision = %#v, want Discovery", discovery)
-	}
+	discovery := beginDiscoveryDecision(t, app, cookie)
 	accepted := acceptDecisionResult(t, app, cookie, discovery)
 	if accepted.PendingRating == nil {
 		t.Fatal("Discovery Acceptance did not return a Pending rating")

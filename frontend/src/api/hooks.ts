@@ -175,7 +175,7 @@ export function useRatePending() {
 export function useAddPoolDish() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (input: { dish_id: string; preference_weight: number }) =>
+    mutationFn: (input: { dish_id: string; tier: number }) =>
       api.addPoolDish(input),
     // meal 一并失效：空池 ↔ ready 可能翻转
     onSuccess: () => {
@@ -188,7 +188,7 @@ export function useAddPoolDish() {
 export function useUpdatePoolWeight() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (input: { dish_id: string; preference_weight: number }) =>
+    mutationFn: (input: { dish_id: string; tier: number }) =>
       api.updatePoolDish(input),
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: poolKey }),
     onError: (error) => {

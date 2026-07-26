@@ -245,7 +245,8 @@ func TestAppUpgradesPoolOnlyDecisionSchemaForDiscovery(t *testing.T) {
 	cookie := registerCandidateEater(t, app, "discovery_schema_eater")
 	addCandidatePoolDish(t, app, cookie, "vegetable_dish/番茄炒蛋.md", 5)
 
-	decision := beginMealDecision(t, app, cookie)
+	// 探索是概率触发的：反复开顿直到命中，验证升级后的 CHECK 接受 discovery 写入
+	decision := beginDiscoveryDecision(t, app, cookie)
 	if decision.Mode != "discovery" {
 		t.Errorf("Decision after schema upgrade = %#v, want Discovery mode to be accepted", decision)
 	}

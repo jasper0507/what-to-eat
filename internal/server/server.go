@@ -67,7 +67,6 @@ func ConfigFromEnv() (Config, error) {
 		"DISCOVERY_MAX_POOL_SIZE":            envInt(&discovery.MaxPoolSize),
 		"DISCOVERY_MAX_ELIGIBLE_DISHES":      envInt(&discovery.MaxEligibleDishes),
 		"DISCOVERY_MIN_REROLLS":              envInt(&discovery.MinRerolls),
-		"DISCOVERY_REQUIRED_SIGNALS":         envInt(&discovery.RequiredSignals),
 		"DISCOVERY_RECENT_MEAL_WINDOW":       envInt(&discovery.RecentMealWindow),
 		"DISCOVERY_MAX_DISCOVERIES_PER_MEAL": envInt(&discovery.MaxDiscoveriesPerMeal),
 		"NIM_TIMEOUT": func(value string) (err error) {
@@ -176,11 +175,11 @@ func newApp(
 		meals:         meal.New(db, candidates, decisionRandom, discovery),
 		onboarding:    onboarding.NewInterview(db, candidates, nim),
 	}
-	app.routes(config.WebDir)
+	app.routes(config.WebDir, config.CatalogDir)
 	return app, nil
 }
 
-func (a *App) routes(webDir string) {
+func (a *App) routes(webDir, catalogDir string) {
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
 	router.Use(gin.Recovery())
@@ -203,9 +202,17 @@ func (a *App) routes(webDir string) {
 	authorized.POST("/onboarding/interview/manual", a.useManualOnboarding)
 	authorized.GET("/meals/resume", a.resumeMeal)
 	authorized.POST("/meals", a.beginMeal)
+	authorized.POST("/meals/abandon", a.abandonMeal)
+	authorized.POST("/meals/hand-pick", a.handPickDish)
+	authorized.GET("/eating-records", a.listEatingRecords)
+	authorized.POST("/eating-records/:recordID/rate", a.rateEatingRecord)
 	authorized.POST("/decisions/:decisionID/reroll", a.rerollDecision)
 	authorized.POST("/decisions/:decisionID/accept", a.acceptDecision)
 	authorized.POST("/pending-ratings/:pendingRatingID/rate", a.ratePendingRating)
+	if catalogDir != "" {
+		// 菜谱页图片：CATALOG_DIR 静态挂载，同源、走会话鉴权
+		authorized.Static("/catalog/assets", catalogDir)
+	}
 	if webDir != "" {
 		indexPath := filepath.Join(webDir, "index.html")
 		router.Static("/assets", filepath.Join(webDir, "assets"))

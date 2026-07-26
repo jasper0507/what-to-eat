@@ -21,11 +21,11 @@ type pendingRating struct {
 }
 
 type tasteRatingResult struct {
-	PendingRatingID  int64         `json:"pending_rating_id"`
-	Rating           int           `json:"rating"`
-	Outcome          string        `json:"outcome"`
-	PreferenceWeight *float64      `json:"preference_weight"`
-	Dish             candidateDish `json:"dish"`
+	PendingRatingID int64         `json:"pending_rating_id"`
+	Rating          int           `json:"rating"`
+	Outcome         string        `json:"outcome"`
+	Tier            *int          `json:"tier"`
+	Dish            candidateDish `json:"dish"`
 }
 
 func pendingRatingDiscoveryConfig(maxDiscoveriesPerMeal int) server.DiscoveryConfig {
@@ -34,7 +34,6 @@ func pendingRatingDiscoveryConfig(maxDiscoveriesPerMeal int) server.DiscoveryCon
 		MaxPoolSize:           1,
 		MaxEligibleDishes:     1,
 		MinRerolls:            2,
-		RequiredSignals:       2,
 		RecentMealWindow:      3,
 		MaxDiscoveriesPerMeal: maxDiscoveriesPerMeal,
 	}
@@ -45,10 +44,7 @@ func TestDiscoveryAcceptanceReturnsRecipeAndBlocksBeginWithPendingRating(t *test
 	t.Cleanup(func() { app.Close() })
 	cookie := registerCandidateEater(t, app, "pending_acceptance_eater")
 	addCandidatePoolDish(t, app, cookie, "vegetable_dish/番茄炒蛋.md", 5)
-	decision := beginMealDecision(t, app, cookie)
-	if decision.Mode != "discovery" {
-		t.Fatalf("Decision mode = %q, want discovery", decision.Mode)
-	}
+	decision := beginDiscoveryDecision(t, app, cookie)
 
 	acceptPath := "/api/decisions/" + strconv.FormatInt(decision.ID, 10) + "/accept"
 	var first acceptanceResult
@@ -127,11 +123,11 @@ func TestTasteRatingsThreeToFiveAdmitDishWithOrderedPreferenceWeights(t *testing
 
 	for _, fixture := range []struct {
 		rating int
-		weight float64
+		tier   int
 	}{
-		{rating: 3, weight: 0.7},
-		{rating: 4, weight: 1.0},
-		{rating: 5, weight: 1.3},
+		{rating: 3, tier: 3},
+		{rating: 4, tier: 4},
+		{rating: 5, tier: 5},
 	} {
 		t.Run(strconv.Itoa(fixture.rating), func(t *testing.T) {
 			cookie := registerCandidateEater(
@@ -140,7 +136,7 @@ func TestTasteRatingsThreeToFiveAdmitDishWithOrderedPreferenceWeights(t *testing
 				"rating_admission_"+strconv.Itoa(fixture.rating),
 			)
 			addCandidatePoolDish(t, app, cookie, "vegetable_dish/番茄炒蛋.md", 5)
-			decision := beginMealDecision(t, app, cookie)
+			decision := beginDiscoveryDecision(t, app, cookie)
 			accepted := acceptDecisionResult(t, app, cookie, decision)
 			if accepted.PendingRating == nil {
 				t.Fatal("Discovery Acceptance did not return a Pending rating")
@@ -150,10 +146,10 @@ func TestTasteRatingsThreeToFiveAdmitDishWithOrderedPreferenceWeights(t *testing
 			if rated.PendingRatingID != accepted.PendingRating.ID ||
 				rated.Rating != fixture.rating ||
 				rated.Outcome != "pool_admission" ||
-				rated.PreferenceWeight == nil ||
-				*rated.PreferenceWeight != fixture.weight ||
+				rated.Tier == nil ||
+				*rated.Tier != fixture.tier ||
 				rated.Dish.ID != decision.Dish.ID {
-				t.Errorf("Taste rating result = %#v, want Pool admission at %.1f", rated, fixture.weight)
+				t.Errorf("Taste rating result = %#v, want Pool admission at tier %d", rated, fixture.tier)
 			}
 
 			list := candidatePoolRequest(
@@ -179,11 +175,11 @@ func TestTasteRatingsThreeToFiveAdmitDishWithOrderedPreferenceWeights(t *testing
 					admitted = &pool.Dishes[index]
 				}
 			}
-			if admitted == nil || admitted.PreferenceWeight != fixture.weight {
-				t.Errorf("Candidate pool = %#v, want admitted Discovery at %.1f", pool.Dishes, fixture.weight)
+			if admitted == nil || admitted.Tier != fixture.tier {
+				t.Errorf("Candidate pool = %#v, want admitted Discovery at tier %d", pool.Dishes, fixture.tier)
 			}
 
-			updateCandidatePoolDish(t, app, cookie, decision.Dish.ID, 1.1)
+			updateCandidatePoolDish(t, app, cookie, decision.Dish.ID, 4)
 			resume := candidatePoolRequest(t, app, http.MethodGet, "/api/meals/resume", "", cookie)
 			var state mealState
 			if resume.Code != http.StatusOK {
@@ -206,7 +202,7 @@ func TestLowTasteRatingIsAccountScopedIdempotentAndDurablyRejectsDish(t *testing
 	otherCookie := registerCandidateEater(t, app, "rating_rejection_other")
 	poolDishID := "vegetable_dish/番茄炒蛋.md"
 	addCandidatePoolDish(t, app, ownerCookie, poolDishID, 5)
-	discovery := beginMealDecision(t, app, ownerCookie)
+	discovery := beginDiscoveryDecision(t, app, ownerCookie)
 	accepted := acceptDecisionResult(t, app, ownerCookie, discovery)
 	if accepted.PendingRating == nil {
 		t.Fatal("Discovery Acceptance did not return a Pending rating")
@@ -256,14 +252,14 @@ func TestLowTasteRatingIsAccountScopedIdempotentAndDurablyRejectsDish(t *testing
 		t.Errorf("invalid Taste rating status = %d, want %d", invalidRating.Code, http.StatusBadRequest)
 	}
 
-	addCandidatePoolDish(t, app, ownerCookie, discovery.Dish.ID, 2)
+	addCandidatePoolDish(t, app, ownerCookie, discovery.Dish.ID, 3)
 	first := ratePending(t, app, ownerCookie, pendingID, 2)
 	second := ratePending(t, app, ownerCookie, pendingID, 2)
 	if !reflect.DeepEqual(second, first) {
 		t.Errorf("repeated Taste rating = %#v, want original result %#v", second, first)
 	}
 	if first.Outcome != "rejection_mark" ||
-		first.PreferenceWeight != nil ||
+		first.Tier != nil ||
 		first.Dish.ID != discovery.Dish.ID {
 		t.Errorf("Taste rating result = %#v, want NPC Rejection mark", first)
 	}
@@ -317,24 +313,21 @@ func TestLowTasteRatingIsAccountScopedIdempotentAndDurablyRejectsDish(t *testing
 		}
 	}
 
-	addCandidatePoolDish(t, app, ownerCookie, "drink/柠檬水.md", 1)
-	addCandidatePoolDish(t, app, ownerCookie, "meat_dish/番茄牛腩.md", 1)
+	addCandidatePoolDish(t, app, ownerCookie, "soup/冬瓜排骨汤.md", 4)
+	addCandidatePoolDish(t, app, ownerCookie, "meat_dish/番茄牛腩.md", 4)
 	for sequence := int64(2); sequence <= 3; sequence++ {
 		acceptMealDecision(t, app, ownerCookie, beginMealDecision(t, app, ownerCookie), sequence)
 	}
-	removeCandidatePoolDish(t, app, ownerCookie, "drink/柠檬水.md")
+	removeCandidatePoolDish(t, app, ownerCookie, "soup/冬瓜排骨汤.md")
 	removeCandidatePoolDish(t, app, ownerCookie, "meat_dish/番茄牛腩.md")
 
-	next := beginMealDecision(t, app, ownerCookie)
-	if next.Mode != "discovery" {
-		t.Fatalf("Decision after Rejection mark = %#v, want Discovery pressure", next)
-	}
+	next := beginDiscoveryDecision(t, app, ownerCookie)
 	if next.Dish.ID == discovery.Dish.ID {
-		t.Fatalf("Discovery returned rejected Dish %q after Cooldown elapsed", discovery.Dish.ID)
+		t.Fatalf("Discovery returned rejected Dish %q after rejection", discovery.Dish.ID)
 	}
 	rerolled := rerollMealDecision(t, app, ownerCookie, next)
 	if rerolled.Dish.ID == discovery.Dish.ID {
-		t.Errorf("Discovery Reroll returned rejected Dish %q after Cooldown elapsed", discovery.Dish.ID)
+		t.Errorf("Reroll returned rejected Dish %q after rejection", discovery.Dish.ID)
 	}
 }
 
@@ -449,10 +442,7 @@ func TestExplicitAddRevokesRejectionMark(t *testing.T) {
 	t.Cleanup(func() { app.Close() })
 	cookie := registerCandidateEater(t, app, "rejection_revoke_eater")
 	addCandidatePoolDish(t, app, cookie, "vegetable_dish/番茄炒蛋.md", 5)
-	discovery := beginMealDecision(t, app, cookie)
-	if discovery.Mode != "discovery" {
-		t.Fatalf("Decision = %#v, want Discovery", discovery)
-	}
+	discovery := beginDiscoveryDecision(t, app, cookie)
 	accepted := acceptDecisionResult(t, app, cookie, discovery)
 	if accepted.PendingRating == nil {
 		t.Fatal("Discovery Acceptance did not return a Pending rating")
@@ -476,7 +466,7 @@ func TestExplicitAddRevokesRejectionMark(t *testing.T) {
 		t.Fatalf("Resume after removing pool = %#v, want candidate_pool_empty", state)
 	}
 
-	addCandidatePoolDish(t, app, cookie, discovery.Dish.ID, 2)
+	addCandidatePoolDish(t, app, cookie, discovery.Dish.ID, 3)
 	if state := resumeState(); state.Status != "ready" {
 		t.Errorf("Resume after re-adding rejected Dish = %#v, want revoked Rejection mark to restore readiness", state)
 	}
@@ -490,8 +480,8 @@ func TestExplicitAddRevokesRejectionMark(t *testing.T) {
 	}
 	if len(pool.Dishes) != 1 ||
 		pool.Dishes[0].ID != discovery.Dish.ID ||
-		pool.Dishes[0].PreferenceWeight != 2 {
-		t.Errorf("Candidate pool = %#v, want re-admitted Dish %q at weight 2", pool.Dishes, discovery.Dish.ID)
+		pool.Dishes[0].Tier != 3 {
+		t.Errorf("Candidate pool = %#v, want re-admitted Dish %q at 人上人", pool.Dishes, discovery.Dish.ID)
 	}
 }
 

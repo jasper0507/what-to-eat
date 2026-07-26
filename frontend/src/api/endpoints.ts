@@ -79,14 +79,14 @@ export async function listCandidatePool(
 
 export function addPoolDish(input: {
   dish_id: string;
-  preference_weight: number;
+  tier: number;
 }): Promise<void> {
   return apiFetch("POST", "/api/candidate-pool/dishes", { body: input });
 }
 
 export function updatePoolDish(input: {
   dish_id: string;
-  preference_weight: number;
+  tier: number;
 }): Promise<void> {
   return apiFetch("PATCH", "/api/candidate-pool/dishes", { body: input });
 }

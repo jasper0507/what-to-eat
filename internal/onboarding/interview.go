@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jasper0507/what-to-eat/internal/engine"
 	"github.com/jasper0507/what-to-eat/internal/pool"
 )
 
@@ -268,8 +269,16 @@ func (o *Interview) saveResult(
 			if math.IsNaN(weight) || math.IsInf(weight, 0) {
 				continue
 			}
-			weight = min(pool.MaxPreferenceWeight, max(1, weight))
-			err = o.pool.Admit(context, transaction, accountID, dishID, weight)
+			// 过渡垫片：NIM 仍报连续权重（1–5），折算入池上三档；
+			// 第 3 段访谈换脑后由提示词直接产出档位语言
+			tier := engine.TierRenShangRen
+			switch {
+			case weight >= 4.5:
+				tier = engine.TierHang
+			case weight >= 3.5:
+				tier = engine.TierDingJian
+			}
+			err = o.pool.Admit(context, transaction, accountID, dishID, tier)
 			if errors.Is(err, pool.ErrDishRejected) {
 				continue
 			}
