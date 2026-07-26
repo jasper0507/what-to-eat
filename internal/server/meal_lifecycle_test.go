@@ -441,6 +441,20 @@ func TestHandPickUnlocksOnlyAtBudgetExhaustion(t *testing.T) {
 		t.Errorf("hand-pick acceptance = %#v, want first Eating record for 番茄牛腩 without Pending rating", acceptance)
 	}
 
+	// 手选后站着的最后一次揭示被标记取代：陈旧 accept 得到干净的 404，
+	// 而不是撞 eating_records.meal_id 唯一约束的 500
+	staleAccept := candidatePoolRequest(
+		t,
+		app,
+		http.MethodPost,
+		"/api/decisions/"+strconv.FormatInt(state.Decision.ID, 10)+"/accept",
+		"",
+		cookie,
+	)
+	if staleAccept.Code != http.StatusNotFound {
+		t.Errorf("stale accept after hand-pick status = %d, want %d; body = %s", staleAccept.Code, http.StatusNotFound, staleAccept.Body)
+	}
+
 	// 本顿已了结：可以开始新的一顿
 	next := beginMealState(t, app, cookie)
 	if next.Status != "active_decision" {
@@ -491,7 +505,8 @@ func TestAbandonSettlesMealWithoutEatingRecordOrCooldown(t *testing.T) {
 		t.Errorf("reason after abandon = %q, want a non-relaxation reason", next.Decision.Reason)
 	}
 
-	// 已放弃的 Meal 上的旧 Decision 不可再操作
+	// 已放弃的 Meal 上的旧 Decision 不可再操作——Reroll 与 Accept 同一口径，
+	// 否则陈旧客户端能给放弃的这顿落下幽灵吃饭记录
 	staleReroll := candidatePoolRequest(
 		t,
 		app,
@@ -502,6 +517,22 @@ func TestAbandonSettlesMealWithoutEatingRecordOrCooldown(t *testing.T) {
 	)
 	if staleReroll.Code != http.StatusNotFound {
 		t.Errorf("Reroll on abandoned Meal status = %d, want %d", staleReroll.Code, http.StatusNotFound)
+	}
+	staleAccept := candidatePoolRequest(
+		t,
+		app,
+		http.MethodPost,
+		"/api/decisions/"+strconv.FormatInt(begun.Decision.ID, 10)+"/accept",
+		"",
+		cookie,
+	)
+	if staleAccept.Code != http.StatusNotFound {
+		t.Errorf("Accept on abandoned Meal status = %d, want %d", staleAccept.Code, http.StatusNotFound)
+	}
+	// 第二次开的这顿仍站着 active Decision，历史必须只有零条记录
+	records = candidatePoolRequest(t, app, http.MethodGet, "/api/eating-records", "", cookie)
+	if records.Body.String() != `{"records":[]}` {
+		t.Errorf("Eating records after stale accept = %q, want empty", records.Body)
 	}
 }
 
@@ -590,8 +621,13 @@ func TestOccasionNeverClassIsNeverRevealed(t *testing.T) {
 	t.Cleanup(func() { app.Close() })
 	cookie := registerCandidateEater(t, app, "occasion_never_eater")
 
-	// 池里只有饮料：视同空池
+	// 池里只有饮料：视同空池——Resume 与 Begin 必须同一口径，
+	// 否则 ready 状态下的开始按钮成死键
 	addCandidatePoolDish(t, app, cookie, lemonWater, 5)
+	resume := candidatePoolRequest(t, app, http.MethodGet, "/api/meals/resume", "", cookie)
+	if !strings.Contains(resume.Body.String(), `"status":"candidate_pool_empty"`) {
+		t.Errorf("drink-only Resume = %q, want candidate_pool_empty", resume.Body)
+	}
 	blocked := candidatePoolRequest(t, app, http.MethodPost, "/api/meals", "", cookie)
 	if blocked.Code != http.StatusConflict {
 		t.Fatalf("drink-only Begin status = %d, want %d; body = %s", blocked.Code, http.StatusConflict, blocked.Body)

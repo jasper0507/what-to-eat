@@ -256,28 +256,51 @@ func (m *Lifecycle) resumeOn(
 		return State{}, err
 	}
 
-	var hasCandidates bool
-	if err := queryer.QueryRowContext(
-		context,
-		`SELECT EXISTS(
-			SELECT 1
-			FROM candidate_pool
-			WHERE candidate_pool.account_id = ?
-			  AND NOT EXISTS (
-				SELECT 1
-				FROM rejection_marks
-				WHERE rejection_marks.account_id = candidate_pool.account_id
-				  AND rejection_marks.dish_id = candidate_pool.dish_id
-			  )
-		 )`,
-		accountID,
-	).Scan(&hasCandidates); err != nil {
+	hasCandidates, err := hasDecidablePool(context, queryer, accountID)
+	if err != nil {
 		return State{}, err
 	}
 	if !hasCandidates {
 		return State{Status: StatusCandidatePoolEmpty}, nil
 	}
 	return State{Status: StatusReady}, nil
+}
+
+// hasDecidablePool 判定池是否可开饭：与 Begin 的口径一致——只剩永零类
+// （酱料/饮品/甜品/半成品）的池视同空池（ADR-0022），Resume 不许报 ready
+// 而 Begin 又拒绝，否则开始按钮成死键。
+func hasDecidablePool(
+	context context.Context,
+	queryer sqlQueryer,
+	accountID int64,
+) (bool, error) {
+	rows, err := queryer.QueryContext(
+		context,
+		`SELECT candidate_pool.dish_id
+		 FROM candidate_pool
+		 WHERE candidate_pool.account_id = ?
+		   AND NOT EXISTS (
+			SELECT 1
+			FROM rejection_marks
+			WHERE rejection_marks.account_id = candidate_pool.account_id
+			  AND rejection_marks.dish_id = candidate_pool.dish_id
+		   )`,
+		accountID,
+	)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var dishID string
+		if err := rows.Scan(&dishID); err != nil {
+			return false, err
+		}
+		if engine.ClassifyOccasion(catalog.PathTaxonomy(dishID).Category) != engine.OccasionNever {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
 }
 
 // rerollsRemaining 从 decisions 账本读出该 Meal 的剩余 Reroll 额度。
@@ -1065,12 +1088,13 @@ func (m *Lifecycle) Accept(
 	defer transaction.Rollback()
 
 	var mealID int64
-	var status, mode, dishID, dishName string
+	var mealStatus, status, mode, dishID, dishName string
 	var existingSequence, rerolledToID sql.NullInt64
 	err = transaction.QueryRowContext(
 		context,
-		`SELECT meals.id, decisions.status, decisions.mode, catalog_dishes.source_path,
-		        catalog_dishes.name, eating_records.sequence, decisions.rerolled_to_id
+		`SELECT meals.id, meals.status, decisions.status, decisions.mode,
+		        catalog_dishes.source_path, catalog_dishes.name,
+		        eating_records.sequence, decisions.rerolled_to_id
 		 FROM decisions
 		 JOIN meals ON meals.id = decisions.meal_id
 		 JOIN catalog_dishes ON catalog_dishes.source_path = decisions.dish_id
@@ -1078,7 +1102,7 @@ func (m *Lifecycle) Accept(
 		 WHERE decisions.id = ? AND meals.account_id = ?`,
 		decisionID,
 		accountID,
-	).Scan(&mealID, &status, &mode, &dishID, &dishName, &existingSequence, &rerolledToID)
+	).Scan(&mealID, &mealStatus, &status, &mode, &dishID, &dishName, &existingSequence, &rerolledToID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Acceptance{}, ErrDecisionNotFound
 	}
@@ -1107,7 +1131,10 @@ func (m *Lifecycle) Accept(
 		}
 		return result, nil
 	}
-	if status != "active" {
+	// Meal 状态守卫必须在幂等重放分支之后：合法接受后 Meal 已是 accepted。
+	// 已放弃/已了结的 Meal 上站着的旧 Decision 一律 404——否则放弃的这顿会
+	// 落下幽灵吃饭记录，违反「放弃：无吃饭记录、不进冷却」（ADR-0022）。
+	if mealStatus != "active" || status != "active" {
 		return Acceptance{}, ErrDecisionNotFound
 	}
 
@@ -1269,6 +1296,18 @@ func (m *Lifecycle) HandPick(
 	}
 	handPickDecisionID, err := decisionResult.LastInsertId()
 	if err != nil {
+		return Acceptance{}, err
+	}
+	// 站着的最后一次揭示被手选取代：按 Reroll 的既有建模标记 rerolled_to_id，
+	// 维持「active Decision 只存在于 active Meal」的不变量，陈旧 accept 得到
+	// 干净的 404 而不是撞 eating_records.meal_id 唯一约束的 500。
+	if _, err := transaction.ExecContext(
+		context,
+		`UPDATE decisions SET rerolled_to_id = ?
+		 WHERE meal_id = ? AND status = 'active' AND rerolled_to_id IS NULL`,
+		handPickDecisionID,
+		mealID,
+	); err != nil {
 		return Acceptance{}, err
 	}
 

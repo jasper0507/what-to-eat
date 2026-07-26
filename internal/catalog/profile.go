@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/jasper0507/what-to-eat/internal/engine"
 )
@@ -219,31 +220,50 @@ func parseCookMinutes(description string) int {
 
 func parseQuantity(raw string) float64 {
 	raw = strings.TrimSpace(raw)
-	// 区间「30-40」取上界
+	// 区间「30-40」「1.5~2」取上界；分隔符含多字节字符（–、至），必须按
+	// rune 宽度跳过，不能 index+1 的字节切片（会切进半个字符）。
 	if index := strings.IndexAny(raw, "-–~至"); index > 0 {
-		raw = strings.TrimSpace(raw[index+1:])
+		_, width := utf8.DecodeRuneInString(raw[index:])
+		raw = strings.TrimSpace(raw[index+width:])
 		raw = strings.TrimLeft(raw, "-–~至 ")
 	}
 	if value, err := strconv.ParseFloat(raw, 64); err == nil {
 		return value
 	}
-	// 汉字数词：半 → 0.5；两个半 → 2.5；一~十的十位组合（十五、二十）不在
-	// 语料样式内，逐字累加已覆盖实际出现的「两小时」「一小时」「半小时」。
-	total := 0.0
-	runes := []rune(raw)
-	for index := 0; index < len(runes); index++ {
-		switch runes[index] {
-		case '半':
-			total += 0.5
-		case '个':
-			// 「两个半」的连接字
-		default:
-			if value, ok := chineseNumeralUnit[runes[index]]; ok {
-				total += value
+	return chineseQuantity(raw)
+}
+
+// chineseQuantity 换算汉字数词：一~十、十位组合（二十、二十五）、半（0.5）、
+// 「X个半」（X+0.5）。「个」是连接字不计值。
+func chineseQuantity(raw string) float64 {
+	tens, units := "", raw
+	if index := strings.IndexRune(raw, '十'); index >= 0 {
+		tens = raw[:index]
+		units = raw[index+len("十"):]
+	}
+	sum := func(part string) float64 {
+		total := 0.0
+		for _, character := range part {
+			switch character {
+			case '半':
+				total += 0.5
+			case '个':
+			default:
+				if value, ok := chineseNumeralUnit[character]; ok {
+					total += value
+				}
 			}
 		}
+		return total
 	}
-	return total
+	if strings.ContainsRune(raw, '十') {
+		tensValue := sum(tens)
+		if tensValue == 0 {
+			tensValue = 1
+		}
+		return tensValue*10 + sum(units)
+	}
+	return sum(units)
 }
 
 // parseImages 收集图片引用：相对路径归位为 Catalog 相对路径（供静态挂载），
@@ -257,6 +277,9 @@ func parseImages(sourcePath, content string) []string {
 		if strings.HasPrefix(reference, "http://") ||
 			strings.HasPrefix(reference, "https://") {
 			// 外链图原样保留
+		} else if strings.HasPrefix(reference, "/") {
+			// 站点绝对路径无从归位到 Catalog 目录，丢弃（否则产出永远 404 的条目）
+			continue
 		} else {
 			reference = strings.TrimPrefix(reference, "./")
 			if directory != "." {
