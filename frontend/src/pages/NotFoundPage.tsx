@@ -5,7 +5,7 @@ import { cn } from "@/lib/utils";
 
 export default function NotFoundPage() {
   return (
-    <div className="animate-rise flex flex-col items-center gap-6 py-16 text-center">
+    <div className="animate-rise flex flex-col items-center gap-6 py-16 text-center lg:my-auto lg:py-0">
       <span
         aria-hidden="true"
         className="font-serif text-6xl leading-none text-brand"

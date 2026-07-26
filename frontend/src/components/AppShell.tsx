@@ -32,7 +32,7 @@ export default function AppShell() {
     );
 
   return (
-    <div className="min-h-dvh bg-background font-sans text-base text-foreground antialiased">
+    <div className="flex min-h-dvh flex-col bg-background font-sans text-base text-foreground antialiased">
       <a
         href="#main"
         className="sr-only focus-visible:not-sr-only focus-visible:absolute focus-visible:top-2 focus-visible:left-2 focus-visible:z-50 focus-visible:rounded-md focus-visible:bg-card focus-visible:px-3 focus-visible:py-2 focus-visible:ring-2 focus-visible:ring-ring"
@@ -78,10 +78,12 @@ export default function AppShell() {
           </nav>
         </div>
       </header>
+      {/* flex-1 + 页面级 my-auto：舞台页在剩余视口里垂直居中；
+          lg 底衬略大于顶衬，把光学中心抬到几何中心线上方一点 */}
       <main
         id="main"
         tabIndex={-1}
-        className="mx-auto w-full max-w-5xl px-4 pt-8 pb-16 outline-none sm:px-6"
+        className="mx-auto flex w-full max-w-5xl flex-1 flex-col px-4 pt-8 pb-16 outline-none sm:px-6 lg:pb-28"
       >
         <Outlet />
       </main>
