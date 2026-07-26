@@ -5,3 +5,4 @@ data/
 frontend/dist/
 frontend/node_modules/
 /testserver
+.env.acceptance

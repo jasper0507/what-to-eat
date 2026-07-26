@@ -2,7 +2,7 @@
 
 ## Knowledge
 
-- [仓库 README：运行、备份与恢复](./README.md)
+- [仓库 README：运行、备份与恢复](../../README.md)
   项目的权威操作说明。用于核对环境变量、Compose 启动方式和 SQLite 备份恢复步骤。
 - [Docker Compose `up` 官方文档](https://docs.docker.com/reference/cli/docker/compose/up/)
   解释后台启动、强制重建和等待健康状态。用于验证容器生命周期行为。

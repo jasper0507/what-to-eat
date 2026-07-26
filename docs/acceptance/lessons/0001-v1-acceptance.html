@@ -108,7 +108,7 @@ cd ..</code></pre>
 
   <h2>6. 做一次真的备份与恢复</h2>
   <p>
-    严格按仓库 <a href="../README.md">README 的“备份与恢复”</a> 操作：把每次 Compose
+    严格按仓库 <a href="../../../README.md">README 的“备份与恢复”</a> 操作：把每次 Compose
     调用改为 <code>docker compose --env-file .env.acceptance -p what2eat_acceptance …</code>，
     把命令中的 <code>.env</code> 文件名替换为 <code>.env.acceptance</code>，并使用新的带日期
     备份目录。备份后先改变一项容易识别的状态，再恢复数据库和配套 env。
