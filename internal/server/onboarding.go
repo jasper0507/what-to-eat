@@ -432,12 +432,12 @@ func (a *App) sendOnboardingMessage(context *gin.Context) {
 	context.Request.Body = http.MaxBytesReader(context.Writer, context.Request.Body, 4<<10)
 	var input onboardingMessageInput
 	if err := context.ShouldBindJSON(&input); err != nil {
-		writeError(context, http.StatusBadRequest, "invalid_request", "消息格式无效")
+		writeError(context, http.StatusBadRequest, codeInvalidRequest, "消息格式无效")
 		return
 	}
 	input.Message = strings.TrimSpace(input.Message)
 	if input.Message == "" || utf8.RuneCountInString(input.Message) > maxOnboardingMessage {
-		writeError(context, http.StatusBadRequest, "invalid_request", "消息须为 1–600 个字符")
+		writeError(context, http.StatusBadRequest, codeInvalidRequest, "消息须为 1–600 个字符")
 		return
 	}
 	state, err := a.onboarding.Send(context, account.ID, input.Message)
@@ -479,7 +479,7 @@ func (a *App) writeOnboardingError(
 		writeError(
 			context,
 			http.StatusServiceUnavailable,
-			"nim_unavailable",
+			codeNIMUnavailable,
 			"NIM 暂时不可用，请重试或改用手工 Catalog 编辑",
 		)
 	case errors.Is(err, errOnboardingRateLimited):
@@ -487,35 +487,35 @@ func (a *App) writeOnboardingError(
 		writeError(
 			context,
 			http.StatusTooManyRequests,
-			"rate_limited",
+			codeRateLimited,
 			"访谈消息过于频繁，请稍后再试",
 		)
 	case errors.Is(err, errOnboardingLimitReached):
 		writeError(
 			context,
 			http.StatusTooManyRequests,
-			"interview_limit_reached",
+			codeInterviewLimitReached,
 			"访谈次数已达上限，请改用手工 Catalog 编辑",
 		)
 	case errors.Is(err, errOnboardingRetryNeeded):
 		writeError(
 			context,
 			http.StatusConflict,
-			"retry_required",
+			codeRetryRequired,
 			"上一条消息尚未完成，请先重试",
 		)
 	case errors.Is(err, errOnboardingRetryInvalid):
 		writeError(
 			context,
 			http.StatusConflict,
-			"retry_unavailable",
+			codeRetryUnavailable,
 			"当前没有可重试的访谈消息",
 		)
 	case errors.Is(err, errOnboardingFinished):
 		writeError(
 			context,
 			http.StatusConflict,
-			"interview_finished",
+			codeInterviewFinished,
 			"Onboarding interview 已结束",
 		)
 	default:

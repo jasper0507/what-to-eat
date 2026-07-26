@@ -84,7 +84,7 @@ func validDishID(dishID string) bool {
 func (a *App) searchCatalog(context *gin.Context) {
 	query := strings.TrimSpace(context.Query("q"))
 	if query == "" || utf8.RuneCountInString(query) > 100 {
-		writeError(context, http.StatusBadRequest, "invalid_query", "请输入有效的 Dish 名称")
+		writeError(context, http.StatusBadRequest, codeInvalidQuery, "请输入有效的 Dish 名称")
 		return
 	}
 
@@ -123,7 +123,7 @@ func (a *App) searchCatalog(context *gin.Context) {
 func (a *App) getRecipe(context *gin.Context) {
 	dishID := context.Query("dish_id")
 	if !validDishID(dishID) {
-		writeError(context, http.StatusBadRequest, "invalid_request", "Dish 无效")
+		writeError(context, http.StatusBadRequest, codeInvalidRequest, "Dish 无效")
 		return
 	}
 
@@ -134,7 +134,7 @@ func (a *App) getRecipe(context *gin.Context) {
 		dishID,
 	).Scan(&name, &content)
 	if errors.Is(err, sql.ErrNoRows) {
-		writeError(context, http.StatusNotFound, "recipe_not_found", "Recipe 不存在")
+		writeError(context, http.StatusNotFound, codeRecipeNotFound, "Recipe 不存在")
 		return
 	}
 	if err != nil {

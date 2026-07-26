@@ -192,7 +192,7 @@ func (a *App) routes(webDir string) {
 		})
 		router.NoRoute(func(context *gin.Context) {
 			if strings.HasPrefix(context.Request.URL.Path, "/api/") {
-				writeError(context, http.StatusNotFound, "not_found", "资源不存在")
+				writeError(context, http.StatusNotFound, codeNotFound, "资源不存在")
 				return
 			}
 			context.File(indexPath)
@@ -220,5 +220,5 @@ func writeError(context *gin.Context, status int, code, message string) {
 
 func writeInternalError(context *gin.Context, operation string, err error) {
 	log.Printf("%s: %v", operation, err)
-	writeError(context, http.StatusInternalServerError, "internal_error", "服务暂时不可用")
+	writeError(context, http.StatusInternalServerError, codeInternalError, "服务暂时不可用")
 }

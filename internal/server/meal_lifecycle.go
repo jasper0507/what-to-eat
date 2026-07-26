@@ -1161,14 +1161,14 @@ func (a *App) beginMeal(context *gin.Context) {
 		writeError(
 			context,
 			http.StatusConflict,
-			string(state.Status),
+			codePendingRatings,
 			"请先解决所有 Pending rating，再开始新的 Decision",
 		)
 	case errors.Is(err, errCandidatePoolEmpty):
 		writeError(
 			context,
 			http.StatusConflict,
-			string(state.Status),
+			codeCandidatePoolEmpty,
 			"Candidate pool 为空，无法创建 Decision",
 		)
 	case err != nil:
@@ -1186,7 +1186,7 @@ func (a *App) rerollDecision(context *gin.Context) {
 	account := sessionAccount(context)
 	decisionID, err := strconv.ParseInt(context.Param("decisionID"), 10, 64)
 	if err != nil || decisionID <= 0 {
-		writeError(context, http.StatusNotFound, "decision_not_found", "Decision 不存在")
+		writeError(context, http.StatusNotFound, codeDecisionNotFound, "Decision 不存在")
 		return
 	}
 	state, err := a.mealLifecycle.Reroll(context, account.ID, decisionID)
@@ -1195,11 +1195,11 @@ func (a *App) rerollDecision(context *gin.Context) {
 		writeError(
 			context,
 			http.StatusConflict,
-			string(state.Status),
+			codeCandidatePoolEmpty,
 			"Candidate pool 为空，无法 Reroll Decision",
 		)
 	case errors.Is(err, errDecisionNotFound):
-		writeError(context, http.StatusNotFound, "decision_not_found", "Decision 不存在")
+		writeError(context, http.StatusNotFound, codeDecisionNotFound, "Decision 不存在")
 	case err != nil:
 		writeInternalError(context, "reroll Decision", err)
 	default:
@@ -1211,13 +1211,13 @@ func (a *App) acceptDecision(context *gin.Context) {
 	account := sessionAccount(context)
 	decisionID, err := strconv.ParseInt(context.Param("decisionID"), 10, 64)
 	if err != nil || decisionID <= 0 {
-		writeError(context, http.StatusNotFound, "decision_not_found", "Decision 不存在")
+		writeError(context, http.StatusNotFound, codeDecisionNotFound, "Decision 不存在")
 		return
 	}
 	result, err := a.mealLifecycle.Accept(context, account.ID, decisionID)
 	switch {
 	case errors.Is(err, errDecisionNotFound):
-		writeError(context, http.StatusNotFound, "decision_not_found", "Decision 不存在")
+		writeError(context, http.StatusNotFound, codeDecisionNotFound, "Decision 不存在")
 	case err != nil:
 		writeInternalError(context, "accept Decision", err)
 	default:
@@ -1229,20 +1229,20 @@ func (a *App) ratePendingRating(context *gin.Context) {
 	account := sessionAccount(context)
 	pendingRatingID, err := strconv.ParseInt(context.Param("pendingRatingID"), 10, 64)
 	if err != nil || pendingRatingID <= 0 {
-		writeError(context, http.StatusNotFound, "pending_rating_not_found", "Pending rating 不存在")
+		writeError(context, http.StatusNotFound, codePendingRatingNotFound, "Pending rating 不存在")
 		return
 	}
 	var input tasteRatingInput
 	if err := context.ShouldBindJSON(&input); err != nil || input.Rating < 1 || input.Rating > 5 {
-		writeError(context, http.StatusBadRequest, "invalid_request", "Taste rating 必须为 1–5")
+		writeError(context, http.StatusBadRequest, codeInvalidRequest, "Taste rating 必须为 1–5")
 		return
 	}
 	result, err := a.mealLifecycle.Rate(context, account.ID, pendingRatingID, input.Rating)
 	switch {
 	case errors.Is(err, errPendingRatingNotFound):
-		writeError(context, http.StatusNotFound, "pending_rating_not_found", "Pending rating 不存在")
+		writeError(context, http.StatusNotFound, codePendingRatingNotFound, "Pending rating 不存在")
 	case errors.Is(err, errTasteRatingConflict):
-		writeError(context, http.StatusConflict, "rating_conflict", "Taste rating 与已有结果冲突")
+		writeError(context, http.StatusConflict, codeRatingConflict, "Taste rating 与已有结果冲突")
 	case err != nil:
 		writeInternalError(context, "resolve Pending rating", err)
 	default:

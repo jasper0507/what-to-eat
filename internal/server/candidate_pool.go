@@ -249,7 +249,7 @@ func (a *App) addCandidatePoolDish(context *gin.Context) {
 	if err := context.ShouldBindJSON(&input); err != nil ||
 		!validDishID(input.DishID) ||
 		!validPreferenceWeight(input.PreferenceWeight) {
-		writeError(context, http.StatusBadRequest, "invalid_request", "Dish 或 Preference weight 无效")
+		writeError(context, http.StatusBadRequest, codeInvalidRequest, "Dish 或 Preference weight 无效")
 		return
 	}
 
@@ -259,7 +259,7 @@ func (a *App) addCandidatePoolDish(context *gin.Context) {
 		return
 	}
 	if !added {
-		writeError(context, http.StatusNotFound, "dish_unavailable", "无法加入 Candidate pool")
+		writeError(context, http.StatusNotFound, codeDishUnavailable, "无法加入 Candidate pool")
 		return
 	}
 	context.Status(http.StatusCreated)
@@ -272,7 +272,7 @@ func (a *App) updateCandidatePoolDish(context *gin.Context) {
 	if err := context.ShouldBindJSON(&input); err != nil ||
 		!validDishID(input.DishID) ||
 		!validPreferenceWeight(input.PreferenceWeight) {
-		writeError(context, http.StatusBadRequest, "invalid_request", "Dish 或 Preference weight 无效")
+		writeError(context, http.StatusBadRequest, codeInvalidRequest, "Dish 或 Preference weight 无效")
 		return
 	}
 
@@ -282,7 +282,7 @@ func (a *App) updateCandidatePoolDish(context *gin.Context) {
 		return
 	}
 	if !found {
-		writeError(context, http.StatusNotFound, "candidate_pool_member_not_found", "Candidate pool 中没有这个 Dish")
+		writeError(context, http.StatusNotFound, codePoolMemberNotFound, "Candidate pool 中没有这个 Dish")
 		return
 	}
 	context.Status(http.StatusNoContent)
@@ -292,7 +292,7 @@ func (a *App) removeCandidatePoolDish(context *gin.Context) {
 	account := sessionAccount(context)
 	dishID := context.Query("dish_id")
 	if !validDishID(dishID) {
-		writeError(context, http.StatusBadRequest, "invalid_request", "Dish 无效")
+		writeError(context, http.StatusBadRequest, codeInvalidRequest, "Dish 无效")
 		return
 	}
 
@@ -302,7 +302,7 @@ func (a *App) removeCandidatePoolDish(context *gin.Context) {
 		return
 	}
 	if !found {
-		writeError(context, http.StatusNotFound, "candidate_pool_member_not_found", "Candidate pool 中没有这个 Dish")
+		writeError(context, http.StatusNotFound, codePoolMemberNotFound, "Candidate pool 中没有这个 Dish")
 		return
 	}
 	context.Status(http.StatusNoContent)
@@ -311,4 +311,3 @@ func (a *App) removeCandidatePoolDish(context *gin.Context) {
 func validPreferenceWeight(weight float64) bool {
 	return weight >= minPreferenceWeight && weight <= maxPreferenceWeight
 }
-

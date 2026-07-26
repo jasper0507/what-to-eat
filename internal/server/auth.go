@@ -267,13 +267,13 @@ const sessionAccountKey = "what2eat_account"
 func (a *App) requireAccount(context *gin.Context) {
 	cookie, err := context.Cookie(sessionCookieName)
 	if err != nil {
-		writeError(context, http.StatusUnauthorized, "unauthorized", "需要登录")
+		writeError(context, http.StatusUnauthorized, codeUnauthorized, "需要登录")
 		context.Abort()
 		return
 	}
 	account, err := a.sessions.Verify(context, cookie)
 	if errors.Is(err, errUnauthenticated) {
-		writeError(context, http.StatusUnauthorized, "unauthorized", "需要登录")
+		writeError(context, http.StatusUnauthorized, codeUnauthorized, "需要登录")
 		context.Abort()
 		return
 	}
@@ -293,17 +293,17 @@ func sessionAccount(context *gin.Context) accountResponse {
 func (a *App) register(context *gin.Context) {
 	var input credentials
 	if err := context.ShouldBindJSON(&input); err != nil || !validCredentials(input) {
-		writeError(context, http.StatusBadRequest, "invalid_request", "用户名或密码不符合要求")
+		writeError(context, http.StatusBadRequest, codeInvalidRequest, "用户名或密码不符合要求")
 		return
 	}
 
 	grant, err := a.sessions.Register(context, input)
 	if errors.Is(err, errPasswordUnusable) {
-		writeError(context, http.StatusBadRequest, "invalid_request", "用户名或密码不符合要求")
+		writeError(context, http.StatusBadRequest, codeInvalidRequest, "用户名或密码不符合要求")
 		return
 	}
 	if errors.Is(err, errAccountUnavailable) {
-		writeError(context, http.StatusConflict, "account_unavailable", "无法创建 Account")
+		writeError(context, http.StatusConflict, codeAccountUnavailable, "无法创建 Account")
 		return
 	}
 	if err != nil {
@@ -318,16 +318,16 @@ func (a *App) register(context *gin.Context) {
 func (a *App) login(context *gin.Context) {
 	var input credentials
 	if err := context.ShouldBindJSON(&input); err != nil {
-		writeError(context, http.StatusBadRequest, "invalid_request", "请求格式无效")
+		writeError(context, http.StatusBadRequest, codeInvalidRequest, "请求格式无效")
 		return
 	}
 
 	grant, err := a.sessions.Login(context, input, requestIP(context.Request))
 	switch {
 	case errors.Is(err, errLoginRateLimited):
-		writeError(context, http.StatusTooManyRequests, "rate_limited", "登录尝试过多，请稍后再试")
+		writeError(context, http.StatusTooManyRequests, codeRateLimited, "登录尝试过多，请稍后再试")
 	case errors.Is(err, errInvalidCredentials):
-		writeError(context, http.StatusUnauthorized, "invalid_credentials", "用户名或密码错误")
+		writeError(context, http.StatusUnauthorized, codeInvalidCredentials, "用户名或密码错误")
 	case err != nil:
 		writeInternalError(context, "login Account", err)
 	default:
