@@ -12,6 +12,20 @@ export async function registerAccount(page: Page, username: string) {
   ).toBeVisible();
 }
 
+/** 绕过 UI 把菜移出池子（造局用）。 */
+export function removeCandidatePoolDish(page: Page, dishID: string) {
+  return page.evaluate(
+    async (dish) =>
+      (
+        await fetch(
+          `/api/candidate-pool/dishes?dish_id=${encodeURIComponent(dish)}`,
+          { method: "DELETE" },
+        )
+      ).ok,
+    dishID,
+  );
+}
+
 /** 绕过 UI 往池子塞菜（造局用）；tier 只认上三档 3/4/5。 */
 export function addCandidatePoolDish(
   page: Page,
