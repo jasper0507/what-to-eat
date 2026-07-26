@@ -19,10 +19,6 @@ export const router = createBrowserRouter([
         children: [
           { path: "/", lazy: lazyPage(() => import("@/pages/HomePage")) },
           {
-            path: "/onboarding",
-            lazy: lazyPage(() => import("@/pages/OnboardingPage")),
-          },
-          {
             path: "/candidate-pool",
             lazy: lazyPage(() => import("@/pages/CandidatePoolPage")),
           },

@@ -6,7 +6,6 @@ import type {
   Dish,
   EatingRecordEntry,
   MealState,
-  OnboardingState,
   PoolDish,
   Rating,
   RecipeResponse,
@@ -107,26 +106,6 @@ export function removePoolDish(dishId: string): Promise<void> {
     "DELETE",
     `/api/candidate-pool/dishes?dish_id=${encodeURIComponent(dishId)}`,
   );
-}
-
-export function getOnboarding(signal?: AbortSignal): Promise<OnboardingState> {
-  return apiFetch("GET", "/api/onboarding/interview", { signal });
-}
-
-export function sendOnboardingMessage(
-  message: string,
-): Promise<OnboardingState> {
-  return apiFetch("POST", "/api/onboarding/interview/messages", {
-    body: { message },
-  });
-}
-
-export function retryOnboarding(): Promise<OnboardingState> {
-  return apiFetch("POST", "/api/onboarding/interview/retry");
-}
-
-export function manualOnboarding(): Promise<OnboardingState> {
-  return apiFetch("POST", "/api/onboarding/interview/manual");
 }
 
 export function resumeMeal(signal?: AbortSignal): Promise<MealState> {

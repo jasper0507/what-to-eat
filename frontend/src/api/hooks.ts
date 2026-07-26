@@ -3,7 +3,6 @@ import {
   useMutation,
   useQuery,
   useQueryClient,
-  type QueryClient,
 } from "@tanstack/react-query";
 
 import { ApiError } from "./client";
@@ -12,15 +11,14 @@ import {
   catalogKey,
   historyKey,
   mealKey,
-  onboardingKey,
   poolKey,
   recipeKey,
   sessionKey,
 } from "./keys";
 import { clearSessionExpired } from "./queryClient";
-import type { OnboardingState, Rating } from "./types";
+import type { Rating } from "./types";
 
-// ---- 查询（6 个）----
+// ---- 查询 ----
 
 export function useSession() {
   return useQuery({
@@ -28,13 +26,6 @@ export function useSession() {
     queryFn: ({ signal }) => api.getSession(signal),
     // 会话只在启动时取一次；登录/过期都走 setQueryData
     staleTime: Infinity,
-  });
-}
-
-export function useOnboardingState() {
-  return useQuery({
-    queryKey: onboardingKey,
-    queryFn: ({ signal }) => api.getOnboarding(signal),
   });
 }
 
@@ -80,7 +71,7 @@ export function useRecipe(dishId: string) {
   });
 }
 
-// ---- 变更（12 个）与失效映射 ----
+// ---- 变更与失效映射 ----
 
 function hasCode(error: unknown, ...codes: string[]): boolean {
   return error instanceof ApiError && codes.includes(error.code);
@@ -325,65 +316,5 @@ export function useRemovePoolDish() {
         void queryClient.invalidateQueries({ queryKey: poolKey });
       }
     },
-  });
-}
-
-function applyOnboardingResult(
-  queryClient: QueryClient,
-  state: OnboardingState,
-): void {
-  queryClient.setQueryData(onboardingKey, state);
-  if (state.status === "completed" || state.status === "manual") {
-    // 访谈落库了带权重的 Candidate pool；readiness 也随之改变
-    void queryClient.invalidateQueries({ queryKey: poolKey });
-    void queryClient.invalidateQueries({ queryKey: mealKey });
-  }
-}
-
-function invalidateOnboardingOnConflict(
-  queryClient: QueryClient,
-  error: unknown,
-): void {
-  // nim_unavailable / rate_limited 时服务端已把 failed + can_retry 落库；
-  // 重取让「重试上一条 / 改用手工」按钮从 query 状态渲染，刷新后依然在。
-  if (
-    hasCode(
-      error,
-      "nim_unavailable",
-      "rate_limited",
-      "retry_required",
-      "retry_unavailable",
-      "interview_finished",
-      "interview_limit_reached",
-    )
-  ) {
-    void queryClient.invalidateQueries({ queryKey: onboardingKey });
-  }
-}
-
-export function useSendOnboardingMessage() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (message: string) => api.sendOnboardingMessage(message),
-    onSuccess: (state) => applyOnboardingResult(queryClient, state),
-    onError: (error) => invalidateOnboardingOnConflict(queryClient, error),
-  });
-}
-
-export function useRetryOnboarding() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: () => api.retryOnboarding(),
-    onSuccess: (state) => applyOnboardingResult(queryClient, state),
-    onError: (error) => invalidateOnboardingOnConflict(queryClient, error),
-  });
-}
-
-export function useManualOnboarding() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: () => api.manualOnboarding(),
-    onSuccess: (state) => applyOnboardingResult(queryClient, state),
-    onError: (error) => invalidateOnboardingOnConflict(queryClient, error),
   });
 }

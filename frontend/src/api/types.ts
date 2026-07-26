@@ -88,20 +88,6 @@ export interface EatingRecordEntry {
   pool_tier?: Tier;
 }
 
-export type OnboardingStatus =
-  "not_started" | "in_progress" | "failed" | "completed" | "manual";
-
-export interface OnboardingMessage {
-  role: "user" | "assistant";
-  content: string;
-}
-
-export interface OnboardingState {
-  status: OnboardingStatus;
-  messages: OnboardingMessage[];
-  can_retry: boolean;
-}
-
 export interface RecipeResponse {
   dish: Dish;
   content: string;

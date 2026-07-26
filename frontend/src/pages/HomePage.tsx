@@ -159,82 +159,88 @@ function Stage({ children }: { children: React.ReactNode }) {
 }
 
 /**
- * 驾驶舱布局：舞台占主位，桌面端右侧多一条安静的信息栏（池子概览 +
- * 最近吃过）。栏是纯文字加发丝分隔，永远不与舞台抢戏。
+ * 驾驶舱布局：舞台居中吸睛，桌面端左右各一条安静的信息栏（左·池子概览，
+ * 右·最近吃过），对称的发丝竖线把视线夹向中央。栏是纯文字，永不抢戏。
  */
 function Cockpit({ children }: { children: React.ReactNode }) {
   return (
-    <div className="lg:grid lg:grid-cols-[minmax(0,1fr)_15rem] lg:items-start lg:gap-12">
-      <div className="space-y-4">{children}</div>
-      <CockpitAside />
+    <div className="lg:grid lg:grid-cols-[minmax(0,13rem)_minmax(0,1fr)_minmax(0,13rem)] lg:items-stretch lg:gap-10 xl:gap-14">
+      <PoolRail />
+      <div className="space-y-4 lg:min-w-0">{children}</div>
+      <RecentRail />
     </div>
   );
 }
 
-function CockpitAside() {
+const railLink =
+  "inline-block rounded-sm text-brand-ink underline decoration-brand-ink/40 underline-offset-4 outline-none hover:decoration-brand-ink focus-visible:ring-2 focus-visible:ring-ring";
+
+function PoolRail() {
   const pool = useCandidatePool();
-  const records = useEatingRecords();
-  const recent = (records.data ?? []).slice(0, 4);
 
   return (
     <aside
-      aria-label="池子与近况"
-      className="hidden space-y-8 border-l border-border pl-8 text-sm lg:block"
+      aria-label="池子概览"
+      className="hidden space-y-3 border-r border-border pr-8 pt-1 text-sm lg:block"
     >
-      <section className="space-y-3">
-        <div className="flex items-baseline justify-between gap-3">
-          <h2 className="font-medium">池子</h2>
-          {pool.data ? (
-            <span className="text-muted-foreground">{pool.data.length} 道</span>
-          ) : null}
-        </div>
-        {pool.data && pool.data.length > 0 ? (
-          <ul className="space-y-2">
-            {pool.data.slice(0, 6).map((dish) => (
-              <li
-                key={dish.id}
-                className="flex items-baseline justify-between gap-3"
-              >
-                <span className="truncate">{dish.name}</span>
-                <span className="shrink-0 text-muted-foreground">
-                  {TIER_LABELS[dish.tier]}
-                </span>
-              </li>
-            ))}
-          </ul>
+      <div className="flex items-baseline justify-between gap-3">
+        <h2 className="font-medium">池子</h2>
+        {pool.data ? (
+          <span className="text-muted-foreground">{pool.data.length} 道</span>
         ) : null}
-        <Link
-          to="/candidate-pool"
-          className="inline-block rounded-sm text-brand-ink underline decoration-brand-ink/40 underline-offset-4 outline-none hover:decoration-brand-ink focus-visible:ring-2 focus-visible:ring-ring"
-        >
-          去管池子
-        </Link>
-      </section>
-
-      {recent.length > 0 ? (
-        <section className="space-y-3">
-          <h2 className="font-medium">最近吃过</h2>
-          <ul className="space-y-2">
-            {recent.map((record) => (
-              <li
-                key={record.id}
-                className="flex items-baseline justify-between gap-3"
-              >
-                <span className="truncate">{record.dish.name}</span>
-                <span className="shrink-0 text-muted-foreground">
-                  {shortDate(record.accepted_at)}
-                </span>
-              </li>
-            ))}
-          </ul>
-          <Link
-            to="/history"
-            className="inline-block rounded-sm text-brand-ink underline decoration-brand-ink/40 underline-offset-4 outline-none hover:decoration-brand-ink focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            看全部
-          </Link>
-        </section>
+      </div>
+      {pool.data && pool.data.length > 0 ? (
+        <ul className="space-y-2">
+          {pool.data.slice(0, 8).map((dish) => (
+            <li
+              key={dish.id}
+              className="flex items-baseline justify-between gap-3"
+            >
+              <span className="truncate">{dish.name}</span>
+              <span className="shrink-0 text-muted-foreground">
+                {TIER_LABELS[dish.tier]}
+              </span>
+            </li>
+          ))}
+        </ul>
       ) : null}
+      <Link to="/candidate-pool" className={railLink}>
+        去管池子
+      </Link>
+    </aside>
+  );
+}
+
+function RecentRail() {
+  const records = useEatingRecords();
+  const recent = (records.data ?? []).slice(0, 8);
+
+  return (
+    <aside
+      aria-label="最近吃过"
+      className="hidden space-y-3 border-l border-border pl-8 pt-1 text-sm lg:block"
+    >
+      <h2 className="font-medium">最近吃过</h2>
+      {recent.length > 0 ? (
+        <ul className="space-y-2">
+          {recent.map((record) => (
+            <li
+              key={record.id}
+              className="flex items-baseline justify-between gap-3"
+            >
+              <span className="truncate">{record.dish.name}</span>
+              <span className="shrink-0 text-muted-foreground">
+                {shortDate(record.accepted_at)}
+              </span>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="text-muted-foreground">这里会记下你吃过的每一顿。</p>
+      )}
+      <Link to="/history" className={railLink}>
+        看全部
+      </Link>
     </aside>
   );
 }
@@ -471,7 +477,7 @@ function ExhaustedExits({
   );
 }
 
-/** 空池态即欢迎引导（注册后无弹窗）：访谈 / 起步包 / 自己挑，三条路入池。 */
+/** 空池态即欢迎引导（注册后无弹窗）：起步包 / 自己挑，两条路入池。 */
 function EmptyPoolWelcome() {
   const starter = useStarterPack();
 
@@ -495,14 +501,7 @@ function EmptyPoolWelcome() {
             <Notice tone="error">{starter.error.message}</Notice>
           ) : null}
           <div className="flex w-full max-w-xs flex-col gap-2">
-            <Link
-              to="/onboarding"
-              className={cn(buttonVariants({ size: "lg" }), "w-full")}
-            >
-              开始口味访谈
-            </Link>
             <Button
-              variant="outline"
               size="lg"
               aria-busy={starter.isPending}
               disabled={starter.isPending}
