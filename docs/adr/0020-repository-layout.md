@@ -2,7 +2,9 @@
 
 ## Status
 
-Accepted；决定第 3 条（`internal/server` 保持单一扁平包）已被 ADR-0021 取代
+Accepted；决定第 3 条（`internal/server` 保持单一扁平包）已被 ADR-0021 取代；
+决定第 2 条的 v1 验收教学包已于 2026-07-27 完成使命后整体删除（存档在 git 历史），
+`docs/acceptance/` 不复存在，现行验收基准是 `frontend/tests/` 规格与 `docs/copy.md`
 
 ## Context
 

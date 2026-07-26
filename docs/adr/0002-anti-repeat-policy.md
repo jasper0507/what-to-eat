@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted (revised: event-based, not calendar days)
+Superseded by [ADR-0022](0022-knowing-me-engine.md) (2026-07-27: the sequential cooldown → downweight → least-shown stack was replaced by the multiplicative four-factor engine; the event-based anti-repeat semantics — counting acceptances, not calendar days — carry forward as the freshness factor)
 
 ## Context
 

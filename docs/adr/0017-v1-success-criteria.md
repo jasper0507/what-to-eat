@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Fulfilled — v1 shipped and passed independent acceptance (2026-07-26). Historical record; the current success metric is the redesign north star (first-reveal acceptance rate, computable from the decisions table) defined in docs/redesign-brief.md.
 
 ## Context
 

@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Partially superseded by [ADR-0022](0022-knowing-me-engine.md) (2026-07-27: the transparent signal system survives, but signals now set a per-reveal discovery *probability* — 25% per signal, capped at 75% — instead of deterministically forcing discovery)
 
 ## Context
 

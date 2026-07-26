@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Superseded by [ADR-0022](0022-knowing-me-engine.md) (2026-07-27: the name-bigram collision heuristic was replaced by taste-profile similarity — weighted overlap of main ingredients, flavor profiles, techniques, and category from import-time enrichment; the no-embeddings constraint stands)
 
 ## Context
 
