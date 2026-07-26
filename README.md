@@ -180,3 +180,7 @@ docker compose ps
 ## 致谢
 
 菜谱数据来自 [HowToCook（程序员做饭指南）](https://github.com/Anduin2017/HowToCook)。
+
+## 许可证
+
+[MIT](LICENSE)
