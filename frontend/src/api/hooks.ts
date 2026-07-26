@@ -102,10 +102,14 @@ export function useLogout() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: () => api.logout(),
-    // 账户边界：丢弃这台设备上的一切缓存；RequireSession 看到 null 自然送回 /login
+    // 账户边界：先把 session 置 null（removeQueries 不通知活跃观察者，
+    // 顺序反了 RequireSession 会攥着已移除的旧 query 永远等不到跳转），
+    // 再丢弃这台设备上的其余一切缓存。
     onSuccess: () => {
-      queryClient.removeQueries();
       queryClient.setQueryData(sessionKey, null);
+      queryClient.removeQueries({
+        predicate: (query) => query.queryKey[0] !== sessionKey[0],
+      });
     },
   });
 }
