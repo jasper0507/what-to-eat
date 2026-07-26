@@ -15,7 +15,7 @@ export default function HistoryPage() {
   const records = useEatingRecords();
 
   return (
-    <div className="animate-rise space-y-10">
+    <div className="animate-rise mx-auto max-w-3xl space-y-10">
       <header className="space-y-1">
         <h1 className="font-serif text-2xl font-medium">吃过的</h1>
         <p className="text-sm text-muted-foreground">

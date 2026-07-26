@@ -16,7 +16,7 @@ export default function RecipePage() {
   const recipe = useRecipe(dishId);
 
   return (
-    <div className="animate-rise space-y-8">
+    <div className="animate-rise mx-auto max-w-3xl space-y-8">
       {dishId === "" ? (
         <Notice tone="error">地址少了菜名，回主页重新开一顿吧。</Notice>
       ) : null}

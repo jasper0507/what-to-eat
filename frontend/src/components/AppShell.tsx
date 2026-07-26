@@ -40,7 +40,7 @@ export default function AppShell() {
         跳到主要内容
       </a>
       <header className="border-b border-border">
-        <div className="mx-auto flex h-14 w-full max-w-3xl items-center justify-between gap-3 px-4 sm:px-6">
+        <div className="mx-auto flex h-14 w-full max-w-5xl items-center justify-between gap-3 px-4 sm:px-6">
           <Link
             to="/"
             className="rounded-md font-serif text-lg font-medium tracking-wide outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -81,7 +81,7 @@ export default function AppShell() {
       <main
         id="main"
         tabIndex={-1}
-        className="mx-auto w-full max-w-3xl px-4 pt-8 pb-16 outline-none sm:px-6"
+        className="mx-auto w-full max-w-5xl px-4 pt-8 pb-16 outline-none sm:px-6"
       >
         <Outlet />
       </main>

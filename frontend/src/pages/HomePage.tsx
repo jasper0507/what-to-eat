@@ -8,6 +8,7 @@ import {
   useAccept,
   useBeginMeal,
   useCandidatePool,
+  useEatingRecords,
   useHandPick,
   useMealState,
   useRatePending,
@@ -21,7 +22,7 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { formatMealAt, mealAtISO } from "@/lib/format";
 import { STARTER_PACK } from "@/lib/starterPack";
-import { DEFAULT_POOL_TIER, RATING_TIERS } from "@/lib/tiers";
+import { DEFAULT_POOL_TIER, RATING_TIERS, TIER_LABELS } from "@/lib/tiers";
 
 // 主界面 = Decision stage 的舞台位：三态互斥（空池引导 / 待评分拦截 / 就绪开饭），
 // 揭示就地完成，无路由跳转；接受才离场（去菜谱页）。
@@ -34,29 +35,33 @@ export default function HomePage() {
 
   if (meal.isPending) {
     return (
-      <Stage>
-        <div
-          role="status"
-          aria-label="正在看这一顿的状态"
-          className="flex min-h-72 items-center justify-center"
-        >
-          <LoaderCircle
-            aria-hidden="true"
-            className="size-5 animate-spin text-muted-foreground"
-          />
-        </div>
-      </Stage>
+      <div className="mx-auto max-w-3xl">
+        <Stage>
+          <div
+            role="status"
+            aria-label="正在看这一顿的状态"
+            className="flex min-h-72 items-center justify-center"
+          >
+            <LoaderCircle
+              aria-hidden="true"
+              className="size-5 animate-spin text-muted-foreground"
+            />
+          </div>
+        </Stage>
+      </div>
     );
   }
   if (meal.isError) {
     return (
-      <Stage>
-        <div className="flex min-h-72 items-center justify-center px-6">
-          <Notice tone="error" onRetry={() => void meal.refetch()}>
-            {meal.error.message}
-          </Notice>
-        </div>
-      </Stage>
+      <div className="mx-auto max-w-3xl">
+        <Stage>
+          <div className="flex min-h-72 items-center justify-center px-6">
+            <Notice tone="error" onRetry={() => void meal.refetch()}>
+              {meal.error.message}
+            </Notice>
+          </div>
+        </Stage>
+      </div>
     );
   }
   if (!meal.data) {
@@ -68,7 +73,11 @@ export default function HomePage() {
     return <EmptyPoolWelcome />;
   }
   if (state.status === "pending_ratings") {
-    return <PendingRatingsGate pendingRatings={state.pending_ratings} />;
+    return (
+      <Cockpit>
+        <PendingRatingsGate pendingRatings={state.pending_ratings} />
+      </Cockpit>
+    );
   }
 
   const decision = state.status === "active_decision" ? state.decision : null;
@@ -77,7 +86,7 @@ export default function HomePage() {
   );
 
   return (
-    <div className="space-y-4">
+    <Cockpit>
       {mutationError ? (
         <Notice tone="error">{(mutationError as Error).message}</Notice>
       ) : null}
@@ -103,7 +112,7 @@ export default function HomePage() {
         />
       ) : (
         <Stage>
-          <div className="flex min-h-72 flex-col items-center justify-center gap-6 px-6 py-12 text-center">
+          <div className="flex min-h-72 flex-col items-center justify-center gap-6 px-6 py-12 text-center lg:min-h-96">
             <span
               aria-hidden="true"
               className="font-serif text-6xl leading-none text-brand"
@@ -136,7 +145,7 @@ export default function HomePage() {
           </div>
         </Stage>
       )}
-    </div>
+    </Cockpit>
   );
 }
 
@@ -147,6 +156,96 @@ function Stage({ children }: { children: React.ReactNode }) {
       {children}
     </section>
   );
+}
+
+/**
+ * 驾驶舱布局：舞台占主位，桌面端右侧多一条安静的信息栏（池子概览 +
+ * 最近吃过）。栏是纯文字加发丝分隔，永远不与舞台抢戏。
+ */
+function Cockpit({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="lg:grid lg:grid-cols-[minmax(0,1fr)_15rem] lg:items-start lg:gap-12">
+      <div className="space-y-4">{children}</div>
+      <CockpitAside />
+    </div>
+  );
+}
+
+function CockpitAside() {
+  const pool = useCandidatePool();
+  const records = useEatingRecords();
+  const recent = (records.data ?? []).slice(0, 4);
+
+  return (
+    <aside
+      aria-label="池子与近况"
+      className="hidden space-y-8 border-l border-border pl-8 text-sm lg:block"
+    >
+      <section className="space-y-3">
+        <div className="flex items-baseline justify-between gap-3">
+          <h2 className="font-medium">池子</h2>
+          {pool.data ? (
+            <span className="text-muted-foreground">{pool.data.length} 道</span>
+          ) : null}
+        </div>
+        {pool.data && pool.data.length > 0 ? (
+          <ul className="space-y-2">
+            {pool.data.slice(0, 6).map((dish) => (
+              <li
+                key={dish.id}
+                className="flex items-baseline justify-between gap-3"
+              >
+                <span className="truncate">{dish.name}</span>
+                <span className="shrink-0 text-muted-foreground">
+                  {TIER_LABELS[dish.tier]}
+                </span>
+              </li>
+            ))}
+          </ul>
+        ) : null}
+        <Link
+          to="/candidate-pool"
+          className="inline-block rounded-sm text-brand-ink underline decoration-brand-ink/40 underline-offset-4 outline-none hover:decoration-brand-ink focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          去管池子
+        </Link>
+      </section>
+
+      {recent.length > 0 ? (
+        <section className="space-y-3">
+          <h2 className="font-medium">最近吃过</h2>
+          <ul className="space-y-2">
+            {recent.map((record) => (
+              <li
+                key={record.id}
+                className="flex items-baseline justify-between gap-3"
+              >
+                <span className="truncate">{record.dish.name}</span>
+                <span className="shrink-0 text-muted-foreground">
+                  {shortDate(record.accepted_at)}
+                </span>
+              </li>
+            ))}
+          </ul>
+          <Link
+            to="/history"
+            className="inline-block rounded-sm text-brand-ink underline decoration-brand-ink/40 underline-offset-4 outline-none hover:decoration-brand-ink focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            看全部
+          </Link>
+        </section>
+      ) : null}
+    </aside>
+  );
+}
+
+const shortDateFormatter = new Intl.DateTimeFormat("zh-CN", {
+  month: "long",
+  day: "numeric",
+});
+
+function shortDate(unixSeconds: number): string {
+  return shortDateFormatter.format(new Date(unixSeconds * 1000));
 }
 
 // 这两个 409 语义是「界面陈旧」而非失败：hooks 已 invalidate，
@@ -185,7 +284,7 @@ function Reveal({
 
   return (
     <Stage>
-      <div className="flex min-h-72 flex-col px-6 py-8 sm:px-10">
+      <div className="flex min-h-72 flex-col px-6 py-8 sm:px-10 lg:min-h-96 lg:px-12 lg:py-10">
         <p className="text-sm text-muted-foreground">
           这一顿
           {decision.mode === "discovery" ? (
@@ -377,61 +476,63 @@ function EmptyPoolWelcome() {
   const starter = useStarterPack();
 
   return (
-    <Stage>
-      <div className="flex min-h-72 flex-col items-center justify-center gap-7 px-6 py-14 text-center">
-        <span
-          aria-hidden="true"
-          className="font-serif text-6xl leading-none text-brand"
-        >
-          ？
-        </span>
-        <div className="max-w-md space-y-1.5">
-          <h1 className="font-serif text-2xl font-medium">池子还空着。</h1>
-          <p className="text-sm text-muted-foreground">
-            放几道你爱吃的进来，这一顿才有得挑。
-          </p>
+    <div className="mx-auto max-w-3xl">
+      <Stage>
+        <div className="flex min-h-72 flex-col items-center justify-center gap-7 px-6 py-14 text-center lg:min-h-96">
+          <span
+            aria-hidden="true"
+            className="font-serif text-6xl leading-none text-brand"
+          >
+            ？
+          </span>
+          <div className="max-w-md space-y-1.5">
+            <h1 className="font-serif text-2xl font-medium">池子还空着。</h1>
+            <p className="text-sm text-muted-foreground">
+              放几道你爱吃的进来，这一顿才有得挑。
+            </p>
+          </div>
+          {starter.error ? (
+            <Notice tone="error">{starter.error.message}</Notice>
+          ) : null}
+          <div className="flex w-full max-w-xs flex-col gap-2">
+            <Link
+              to="/onboarding"
+              className={cn(buttonVariants({ size: "lg" }), "w-full")}
+            >
+              开始口味访谈
+            </Link>
+            <Button
+              variant="outline"
+              size="lg"
+              aria-busy={starter.isPending}
+              disabled={starter.isPending}
+              onClick={() =>
+                starter.mutate(
+                  STARTER_PACK.map((dish) => ({
+                    id: dish.id,
+                    tier: DEFAULT_POOL_TIER,
+                  })),
+                )
+              }
+            >
+              {starter.isPending ? (
+                <LoaderCircle
+                  aria-hidden="true"
+                  className="size-4 animate-spin"
+                />
+              ) : null}
+              经典起步包 · {STARTER_PACK.length} 道家常菜入池
+            </Button>
+            <Link
+              to="/candidate-pool"
+              className={cn(buttonVariants({ variant: "link" }), "w-full")}
+            >
+              自己去挑菜
+            </Link>
+          </div>
         </div>
-        {starter.error ? (
-          <Notice tone="error">{starter.error.message}</Notice>
-        ) : null}
-        <div className="flex w-full max-w-xs flex-col gap-2">
-          <Link
-            to="/onboarding"
-            className={cn(buttonVariants({ size: "lg" }), "w-full")}
-          >
-            开始口味访谈
-          </Link>
-          <Button
-            variant="outline"
-            size="lg"
-            aria-busy={starter.isPending}
-            disabled={starter.isPending}
-            onClick={() =>
-              starter.mutate(
-                STARTER_PACK.map((dish) => ({
-                  id: dish.id,
-                  tier: DEFAULT_POOL_TIER,
-                })),
-              )
-            }
-          >
-            {starter.isPending ? (
-              <LoaderCircle
-                aria-hidden="true"
-                className="size-4 animate-spin"
-              />
-            ) : null}
-            经典起步包 · {STARTER_PACK.length} 道家常菜入池
-          </Button>
-          <Link
-            to="/candidate-pool"
-            className={cn(buttonVariants({ variant: "link" }), "w-full")}
-          >
-            自己去挑菜
-          </Link>
-        </div>
-      </div>
-    </Stage>
+      </Stage>
+    </div>
   );
 }
 

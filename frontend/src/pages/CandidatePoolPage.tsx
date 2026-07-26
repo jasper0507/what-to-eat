@@ -21,7 +21,7 @@ export default function CandidatePoolPage() {
   const pool = useCandidatePool();
 
   return (
-    <div className="animate-rise space-y-10">
+    <div className="animate-rise space-y-10 lg:grid lg:grid-cols-[minmax(0,1fr)_minmax(0,24rem)] lg:items-start lg:gap-14 lg:space-y-0">
       <section className="space-y-4">
         <header className="space-y-1">
           <h1 className="font-serif text-2xl font-medium">池子</h1>
@@ -158,7 +158,7 @@ function AddSection({ poolIds }: { poolIds: Set<string> }) {
   };
 
   return (
-    <section className="space-y-4" aria-label="往池子加菜">
+    <section className="space-y-4 lg:sticky lg:top-8" aria-label="往池子加菜">
       <header className="space-y-1">
         <h2 className="font-serif text-xl font-medium">往池子加菜</h2>
         <p className="text-sm text-muted-foreground">
