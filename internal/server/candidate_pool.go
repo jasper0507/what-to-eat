@@ -17,7 +17,7 @@ type candidateDishInput struct {
 
 func (a *App) listCandidatePool(context *gin.Context) {
 	owner := sessionAccount(context)
-	dishes, err := a.pool.List(context, owner.ID)
+	dishes, err := a.pool.List(context.Request.Context(), owner.ID)
 	if err != nil {
 		writeInternalError(context, "list Candidate pool", err)
 		return
@@ -36,7 +36,7 @@ func (a *App) addCandidatePoolDish(context *gin.Context) {
 		return
 	}
 
-	added, err := a.pool.Add(context, owner.ID, input.DishID, input.Tier)
+	added, err := a.pool.Add(context.Request.Context(), owner.ID, input.DishID, input.Tier)
 	if err != nil {
 		writeInternalError(context, "add Candidate pool member", err)
 		return
@@ -59,7 +59,7 @@ func (a *App) updateCandidatePoolDish(context *gin.Context) {
 		return
 	}
 
-	found, err := a.pool.UpdateTier(context, owner.ID, input.DishID, input.Tier)
+	found, err := a.pool.UpdateTier(context.Request.Context(), owner.ID, input.DishID, input.Tier)
 	if err != nil {
 		writeInternalError(context, "update Candidate pool member", err)
 		return
@@ -79,7 +79,7 @@ func (a *App) removeCandidatePoolDish(context *gin.Context) {
 		return
 	}
 
-	found, err := a.pool.Remove(context, owner.ID, dishID)
+	found, err := a.pool.Remove(context.Request.Context(), owner.ID, dishID)
 	if err != nil {
 		writeInternalError(context, "remove Candidate pool member", err)
 		return

@@ -25,7 +25,7 @@ func (a *App) requireAccount(context *gin.Context) {
 		context.Abort()
 		return
 	}
-	owner, err := a.sessions.Verify(context, cookie)
+	owner, err := a.sessions.Verify(context.Request.Context(), cookie)
 	if errors.Is(err, account.ErrUnauthenticated) {
 		writeError(context, http.StatusUnauthorized, codeUnauthorized, "需要登录")
 		context.Abort()
@@ -51,7 +51,7 @@ func (a *App) register(context *gin.Context) {
 		return
 	}
 
-	grant, err := a.sessions.Register(context, input)
+	grant, err := a.sessions.Register(context.Request.Context(), input)
 	if errors.Is(err, account.ErrPasswordUnusable) {
 		writeError(context, http.StatusBadRequest, codeInvalidRequest, "用户名或密码不符合要求")
 		return
@@ -76,7 +76,7 @@ func (a *App) login(context *gin.Context) {
 		return
 	}
 
-	grant, err := a.sessions.Login(context, input, requestIP(context.Request))
+	grant, err := a.sessions.Login(context.Request.Context(), input, requestIP(context.Request))
 	switch {
 	case errors.Is(err, account.ErrLoginRateLimited):
 		writeError(context, http.StatusTooManyRequests, codeRateLimited, "登录尝试过多，请稍后再试")
@@ -98,7 +98,7 @@ func (a *App) session(context *gin.Context) {
 // 「这台设备不再持有会话」，不需要先证明会话有效。
 func (a *App) logout(context *gin.Context) {
 	if cookie, err := context.Cookie(sessionCookieName); err == nil {
-		if err := a.sessions.Revoke(context, cookie); err != nil {
+		if err := a.sessions.Revoke(context.Request.Context(), cookie); err != nil {
 			writeInternalError(context, "revoke Account session", err)
 			return
 		}

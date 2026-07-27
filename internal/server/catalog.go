@@ -18,7 +18,7 @@ func (a *App) searchCatalog(context *gin.Context) {
 		return
 	}
 
-	dishes, err := a.catalog.Search(context, query)
+	dishes, err := a.catalog.Search(context.Request.Context(), query)
 	if err != nil {
 		writeInternalError(context, "search Catalog", err)
 		return
@@ -33,7 +33,7 @@ func (a *App) getRecipe(context *gin.Context) {
 		return
 	}
 
-	recipe, err := a.catalog.Recipe(context, dishID)
+	recipe, err := a.catalog.Recipe(context.Request.Context(), dishID)
 	if errors.Is(err, catalog.ErrRecipeNotFound) {
 		writeError(context, http.StatusNotFound, codeRecipeNotFound, "Recipe 不存在")
 		return

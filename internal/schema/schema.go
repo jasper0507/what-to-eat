@@ -4,9 +4,9 @@ import "database/sql"
 
 // Migrate 建立终态 schema：全部 IF NOT EXISTS，重复启动幂等；按旧迁移链
 // 走到终态的既有库原样兼容。任何一张表长什么样，读本文件即可回答。
+// foreign_keys 是连接级 PRAGMA，由 server 的 DSN 带给每条连接，不在这里开。
 func Migrate(db *sql.DB) error {
 	_, err := db.Exec(`
-		PRAGMA foreign_keys = ON;
 		CREATE TABLE IF NOT EXISTS accounts (
 			id INTEGER PRIMARY KEY,
 			username TEXT NOT NULL,

@@ -38,7 +38,7 @@ func resolveLocalHour(reported *int) (int, bool) {
 
 func (a *App) resumeMeal(context *gin.Context) {
 	owner := sessionAccount(context)
-	state, err := a.meals.Resume(context, owner.ID)
+	state, err := a.meals.Resume(context.Request.Context(), owner.ID)
 	if err != nil {
 		writeInternalError(context, "resume Meal lifecycle", err)
 		return
@@ -61,7 +61,7 @@ func (a *App) beginMeal(context *gin.Context) {
 		writeError(context, http.StatusBadRequest, codeInvalidRequest, "local_hour 必须为 0–23")
 		return
 	}
-	state, created, err := a.meals.Begin(context, owner.ID, hour)
+	state, created, err := a.meals.Begin(context.Request.Context(), owner.ID, hour)
 	switch {
 	case errors.Is(err, meal.ErrPendingRatings):
 		writeError(
@@ -107,7 +107,7 @@ func (a *App) rerollDecision(context *gin.Context) {
 		writeError(context, http.StatusBadRequest, codeInvalidRequest, "local_hour 必须为 0–23")
 		return
 	}
-	state, err := a.meals.Reroll(context, owner.ID, decisionID, hour)
+	state, err := a.meals.Reroll(context.Request.Context(), owner.ID, decisionID, hour)
 	switch {
 	case errors.Is(err, meal.ErrRerollBudgetExhausted):
 		writeError(
@@ -139,7 +139,7 @@ func (a *App) acceptDecision(context *gin.Context) {
 		writeError(context, http.StatusNotFound, codeDecisionNotFound, "Decision 不存在")
 		return
 	}
-	result, err := a.meals.Accept(context, owner.ID, decisionID)
+	result, err := a.meals.Accept(context.Request.Context(), owner.ID, decisionID)
 	switch {
 	case errors.Is(err, meal.ErrDecisionNotFound):
 		writeError(context, http.StatusNotFound, codeDecisionNotFound, "Decision 不存在")
@@ -153,7 +153,7 @@ func (a *App) acceptDecision(context *gin.Context) {
 // abandonMeal 放弃本顿：三出口之一，无吃饭记录、不进冷却。
 func (a *App) abandonMeal(context *gin.Context) {
 	owner := sessionAccount(context)
-	state, err := a.meals.Abandon(context, owner.ID)
+	state, err := a.meals.Abandon(context.Request.Context(), owner.ID)
 	switch {
 	case errors.Is(err, meal.ErrNoActiveMeal):
 		writeError(context, http.StatusConflict, codeMealNotFound, "没有进行中的这一顿")
@@ -173,7 +173,7 @@ func (a *App) handPickDish(context *gin.Context) {
 		writeError(context, http.StatusBadRequest, codeInvalidRequest, "Dish 无效")
 		return
 	}
-	result, err := a.meals.HandPick(context, owner.ID, input.DishID)
+	result, err := a.meals.HandPick(context.Request.Context(), owner.ID, input.DishID)
 	switch {
 	case errors.Is(err, meal.ErrNoActiveMeal):
 		writeError(context, http.StatusConflict, codeMealNotFound, "没有进行中的这一顿")
@@ -205,7 +205,7 @@ func (a *App) listEatingRecords(context *gin.Context) {
 		}
 		limit = parsed
 	}
-	entries, err := a.meals.History(context, owner.ID, limit)
+	entries, err := a.meals.History(context.Request.Context(), owner.ID, limit)
 	if err != nil {
 		writeInternalError(context, "list Eating records", err)
 		return
@@ -226,7 +226,7 @@ func (a *App) rateEatingRecord(context *gin.Context) {
 		writeError(context, http.StatusBadRequest, codeInvalidRequest, "Taste rating 必须为 1–5")
 		return
 	}
-	result, err := a.meals.RateRecord(context, owner.ID, recordID, input.Rating)
+	result, err := a.meals.RateRecord(context.Request.Context(), owner.ID, recordID, input.Rating)
 	switch {
 	case errors.Is(err, meal.ErrEatingRecordNotFound):
 		writeError(context, http.StatusNotFound, codeEatingRecordNotFound, "吃饭记录不存在")
@@ -251,7 +251,7 @@ func (a *App) ratePendingRating(context *gin.Context) {
 		writeError(context, http.StatusBadRequest, codeInvalidRequest, "Taste rating 必须为 1–5")
 		return
 	}
-	result, err := a.meals.Rate(context, owner.ID, pendingRatingID, input.Rating)
+	result, err := a.meals.Rate(context.Request.Context(), owner.ID, pendingRatingID, input.Rating)
 	switch {
 	case errors.Is(err, meal.ErrPendingRatingNotFound):
 		writeError(context, http.StatusNotFound, codePendingRatingNotFound, "Pending rating 不存在")

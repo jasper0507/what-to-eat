@@ -59,6 +59,13 @@ func envOrDefault(name, fallback string) string {
 	return fallback
 }
 
+// databaseDSN 给库路径带上连接级 PRAGMA：foreign_keys 是每条连接各自的
+// 开关，而连接池随时可能重建连接（如查询被取消后驱动丢弃被 interrupt 的
+// 连接）——必须让每条新连接自带约束，绝不能依赖启动时执行一次。
+func databaseDSN(path string) string {
+	return "file:" + path + "?_pragma=foreign_keys(1)"
+}
+
 type App struct {
 	db            *sql.DB
 	router        *gin.Engine
@@ -84,7 +91,7 @@ func newApp(config Config, decisionRandom *mathrand.Rand) (*App, error) {
 	if config.Discovery != nil {
 		discovery = *config.Discovery
 	}
-	db, err := sql.Open("sqlite", config.DatabasePath)
+	db, err := sql.Open("sqlite", databaseDSN(config.DatabasePath))
 	if err != nil {
 		return nil, fmt.Errorf("open SQLite database %q: %w", config.DatabasePath, err)
 	}
@@ -185,7 +192,16 @@ func writeError(context *gin.Context, status int, code, message string) {
 	})
 }
 
+// statusClientClosedRequest 是 nginx 惯例的 499：客户端已离场。
+const statusClientClosedRequest = 499
+
 func writeInternalError(context *gin.Context, operation string, err error) {
+	// 请求 context 已取消说明客户端离场（前端换页/换 key 的日常 abort），
+	// 不是服务端故障：不落错误日志，也不往断开的连接上编 500。
+	if context.Request.Context().Err() != nil {
+		context.Status(statusClientClosedRequest)
+		return
+	}
 	log.Printf("%s: %v", operation, err)
 	writeError(context, http.StatusInternalServerError, codeInternalError, "服务暂时不可用")
 }
