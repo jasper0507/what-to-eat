@@ -1,5 +1,17 @@
 # 今天吃什么？
 
+<p align="center">
+  <img src="docs/assets/social-preview.png" alt="今天吃什么？自托管单人决策工具" width="720" />
+</p>
+
+<p align="center">
+  <a href="https://what2eat.jasper0507.cc.cd"><img src="https://img.shields.io/badge/demo-在线试用-c96442?style=for-the-badge" alt="在线试用" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue?style=for-the-badge" alt="MIT" /></a>
+  <a href="https://go.dev/"><img src="https://img.shields.io/badge/Go-1.26+-00ADD8?style=for-the-badge&logo=go&logoColor=white" alt="Go" /></a>
+  <a href="compose.yaml"><img src="https://img.shields.io/badge/Docker-Compose-2496ED?style=for-the-badge&logo=docker&logoColor=white" alt="Docker" /></a>
+  <a href="https://github.com/jasper0507/what-to-eat/stargazers"><img src="https://img.shields.io/github/stars/jasper0507/what-to-eat?style=for-the-badge" alt="Stars" /></a>
+</p>
+
 **在线试用：** [https://what2eat.jasper0507.cc.cd](https://what2eat.jasper0507.cc.cd)
 
 一个只回答一个问题的自托管 Web 应用：这一顿吃什么。
@@ -8,6 +20,8 @@
 每到饭点让它揭示一道——不给清单、不给推荐流，一次只上一道菜，
 不满意就换，换满为止。全程没有 LLM、没有外部服务调用，
 一个 Go 二进制加一个 SQLite 文件就是全部。
+
+> Self-hosted meal decision tool for one person: pick from *your* pool, reveal **one dish**, reroll up to 3 times. Go + SQLite single binary, React PWA, Docker Compose — no LLM, no third-party APIs.
 
 ## 它怎么定这一顿
 
