@@ -31,10 +31,11 @@ RUN apk add --no-cache git git-lfs \
     && mv dishes /catalog \
     && mv LICENSE /HOWTOCOOK-LICENSE \
     && rm -rf /tmp/HowToCook \
-    && if grep -RIl \
-          --include='*.jpg' --include='*.jpeg' --include='*.png' \
-          --include='*.webp' --include='*.bmp' --include='*.JPG' \
-          'git-lfs.github.com' /catalog >/dev/null; then \
+    && if find /catalog -type f \
+          \( -name '*.jpg' -o -name '*.jpeg' -o -name '*.png' \
+             -o -name '*.webp' -o -name '*.bmp' -o -name '*.JPG' \) \
+          -exec grep -l 'git-lfs.github.com' {} + 2>/dev/null \
+          | grep -q .; then \
          echo "catalog still contains Git LFS pointer files" >&2; \
          exit 1; \
        fi

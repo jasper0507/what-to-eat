@@ -93,7 +93,7 @@ function imageSource(reference: string): string {
   if (reference.startsWith("http://") || reference.startsWith("https://")) {
     return reference;
   }
-  return `/api/catalog/assets/${encodeURI(reference)}`;
+  return `/api/catalog/dish-images/${encodeURI(reference)}`;
 }
 
 /**

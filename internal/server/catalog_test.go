@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -187,5 +188,100 @@ func TestCatalogSearchReturnsEmptyResultsWithoutCreatingDish(t *testing.T) {
 		if response.Code != http.StatusOK || response.Body.String() != `{"dishes":[]}` {
 			t.Fatalf("search response = (%d, %q), want (200, %q)", response.Code, response.Body, `{"dishes":[]}`)
 		}
+	}
+}
+
+func TestCatalogDishImageRequiresAuthAndServesRealFile(t *testing.T) {
+	app := openCatalogApp(t, "")
+	t.Cleanup(func() { app.Close() })
+
+	unauth := httptest.NewRequest(
+		http.MethodGet,
+		"/api/catalog/dish-images/vegetable_dish/fixture.jpg",
+		nil,
+	)
+	unauthResponse := httptest.NewRecorder()
+	app.ServeHTTP(unauthResponse, unauth)
+	if unauthResponse.Code != http.StatusUnauthorized {
+		t.Fatalf("unauth status = %d, want %d", unauthResponse.Code, http.StatusUnauthorized)
+	}
+
+	sessionCookie := registerCatalogEater(t, app)
+	request := httptest.NewRequest(
+		http.MethodGet,
+		"/api/catalog/dish-images/vegetable_dish/fixture.jpg",
+		nil,
+	)
+	request.AddCookie(sessionCookie)
+	response := httptest.NewRecorder()
+	app.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body)
+	}
+	if got := response.Header().Get("Cache-Control"); got != "private, max-age=86400" {
+		t.Errorf("Cache-Control = %q, want private max-age", got)
+	}
+	if response.Body.Len() < 100 {
+		t.Fatalf("body too small: %d bytes", response.Body.Len())
+	}
+	if response.Body.String()[:10] == "version ht" {
+		t.Fatal("served git-lfs pointer as image")
+	}
+}
+
+func TestCatalogDishImageRejectsGitLFSPointer(t *testing.T) {
+	// pointer 内容不能进 git（本机会当 LFS 对象上传且 oid 无效）。测试时现写。
+	catalogDir := t.TempDir()
+	dishDir := filepath.Join(catalogDir, "vegetable_dish")
+	if err := os.MkdirAll(dishDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dishDir, "占位.md"), []byte("# 占位\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	pointer := "version https://git-lfs.github.com/spec/v1\n" +
+		"oid sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n" +
+		"size 1\n"
+	if err := os.WriteFile(filepath.Join(dishDir, "pointer.jpg"), []byte(pointer), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	config := testConfig(t, "", &server.DiscoveryConfig{Enabled: false})
+	config.CatalogDir = catalogDir
+	app, err := server.New(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { app.Close() })
+	sessionCookie := registerCatalogEater(t, app)
+
+	request := httptest.NewRequest(
+		http.MethodGet,
+		"/api/catalog/dish-images/vegetable_dish/pointer.jpg",
+		nil,
+	)
+	request.AddCookie(sessionCookie)
+	response := httptest.NewRecorder()
+	app.ServeHTTP(response, request)
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusNotFound, response.Body)
+	}
+}
+
+func TestCatalogDishImageRejectsPathEscape(t *testing.T) {
+	app := openCatalogApp(t, "")
+	t.Cleanup(func() { app.Close() })
+	sessionCookie := registerCatalogEater(t, app)
+
+	request := httptest.NewRequest(
+		http.MethodGet,
+		"/api/catalog/dish-images/../../../etc/passwd",
+		nil,
+	)
+	request.AddCookie(sessionCookie)
+	response := httptest.NewRecorder()
+	app.ServeHTTP(response, request)
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusNotFound)
 	}
 }

@@ -88,7 +88,7 @@ export interface EatingRecordEntry {
 export interface RecipeResponse {
   dish: Dish;
   content: string;
-  /** Catalog 相对路径（拼 /api/catalog/assets/ 前缀）或外链 URL */
+  /** Catalog 相对路径（拼 /api/catalog/dish-images/ 前缀）或外链 URL */
   images: string[];
 }
 

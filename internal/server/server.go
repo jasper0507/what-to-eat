@@ -162,8 +162,9 @@ func (a *App) routes(webDir, catalogDir string) {
 	authorized.POST("/decisions/:decisionID/accept", a.acceptDecision)
 	authorized.POST("/pending-ratings/:pendingRatingID/rate", a.ratePendingRating)
 	if catalogDir != "" {
-		// 菜谱页图片：CATALOG_DIR 静态挂载，同源、走会话鉴权
-		authorized.Static("/catalog/assets", catalogDir)
+		// 菜谱页图片：CATALOG_DIR 同源鉴权；路径 dish-images 与历史
+		// /catalog/assets 脱钩，避免边缘缓存仍 HIT 旧 LFS pointer 响应。
+		authorized.GET("/catalog/dish-images/*filepath", serveCatalogAsset(catalogDir))
 	}
 	if webDir != "" {
 		indexPath := filepath.Join(webDir, "index.html")
