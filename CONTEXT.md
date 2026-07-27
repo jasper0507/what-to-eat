@@ -21,8 +21,12 @@ The cooking instructions and details for a dish, sourced from the catalog (HowTo
 _Avoid_: Using "recipe" to mean the decision result itself — that is a dish
 
 **Catalog**:
-The full external corpus of dishes (and their recipes) available to search and import — HowToCook.
-_Avoid_: Menu, library (ambiguous), candidate pool
+The full corpus of dishes (and their recipes) an eater may search, pool, and be decided toward. Provenance is dual: **imported** dishes from HowToCook (upstream-authoritative body text) and **operator-authored** dishes (local-authoritative). Not an eater's shortlist.
+_Avoid_: Menu, library (ambiguous), candidate pool, "fixed dish pool" (say catalog)
+
+**Catalog listing**:
+Whether a catalog dish is offered to eaters for search, pool add, and new decisions. **Listed** is the default; **unlisted** hides it from those paths while keeping the row so history, past decisions, and existing pool membership can still resolve name and recipe. Unlisting is the operator's "remove from the product" action — not a hard delete of the dish row.
+_Avoid_: Delete dish (ambiguous with destroying history), archive (vague), ban
 
 **Taste profile**:
 A dish's structured taste identity, extracted deterministically at catalog import from the recipe itself — main ingredients, flavor types, techniques (via dictionaries kept in the repo as data), plus the coarse catalog category. Powers discovery similarity and the per-dimension wording of decision reasons.
@@ -82,7 +86,15 @@ _Avoid_: Taste interview / onboarding interview (abolished, do not revive), defa
 
 **Account**:
 The signed-in identity (first-party username + password) that owns an eater's candidate pool, preference weights, and eating records. Required before using the product. No third-party login providers in v1.
-_Avoid_: Profile (ambiguous), user (prefer eater for the decision subject; account is the auth identity); OAuth identity
+_Avoid_: Profile (ambiguous), user (prefer eater for the decision subject; account is the auth identity); OAuth identity; admin / operator (those are not accounts)
+
+**Operator**:
+The human who runs this deployment (typically the self-hoster), not an eater. Uses a separate operator console to maintain the catalog (add full dishes, toggle catalog listing) and to inspect or permanently remove accounts. Not an Account role and not a multi-tenant "admin user" inside the eater product.
+_Avoid_: Admin user, superuser, staff account, user management portal (enterprise SaaS framing)
+
+**Operator-authored dish**:
+A catalog dish whose recipe body is owned by the operator (created via the operator console from a full recipe template), never overwritten by HowToCook import. Same decision rights as imported dishes when listed: search, pool, discovery, ratings.
+_Avoid_: Custom menu item, user-generated dish (eaters do not author catalog recipes in this product), fork of a HowToCook row (imported rows are not edited in place)
 
 **Discovery**:
 A decision whose dish is drawn from the catalog **outside** the candidate pool, chosen by **taste-profile similarity** (main-ingredient / flavor / technique / category overlap, weighted by the reference dish's affinity) to resemble the dishes the eater loves most. Always explicitly labeled as new/exploratory — never presented as a normal pool pick.
