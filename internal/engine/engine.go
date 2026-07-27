@@ -31,11 +31,6 @@ func TierMultiplier(tier int) float64 {
 	}
 }
 
-// DemotedTier 降一档，地板人上人。
-func DemotedTier(tier int) int {
-	return max(TierRenShangRen, tier-1)
-}
-
 // OccasionClass 按 Catalog 品类桶划分的时段类别。
 type OccasionClass int
 

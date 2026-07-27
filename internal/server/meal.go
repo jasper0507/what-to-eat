@@ -23,8 +23,7 @@ type localHourInput struct {
 }
 
 type handPickInput struct {
-	DishID    string `json:"dish_id"`
-	LocalHour *int   `json:"local_hour"`
+	DishID string `json:"dish_id"`
 }
 
 func resolveLocalHour(reported *int) (int, bool) {

@@ -1,6 +1,5 @@
 // 与 Go 后端 wire 格式一一对应的 DTO（字段名 = JSON 序列化名）。
-// 身份规则：导航与变更只允许使用 dish.id；recipe_path 仅用于展示。
-// （今日两者恰好同值——都是 Catalog 源路径——但这是实现巧合，绝不依赖。）
+// 身份规则：导航与变更一律使用 dish.id（Catalog 源路径）。
 
 export interface Account {
   id: number;
@@ -16,8 +15,6 @@ export interface Dish {
   id: string;
   name: string;
   category: string;
-  recipe_path: string;
-  tags: string[];
   /** 导入富化元数据：仅揭示与菜谱页路径填充（信息小字：耗时·难度） */
   difficulty?: number;
   cook_minutes?: number;

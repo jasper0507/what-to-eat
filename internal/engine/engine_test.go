@@ -93,18 +93,6 @@ func TestTierMultiplierRatio(t *testing.T) {
 	}
 }
 
-func TestDemotedTierFloor(t *testing.T) {
-	if DemotedTier(TierHang) != TierDingJian {
-		t.Errorf("夯降档应到顶尖")
-	}
-	if DemotedTier(TierDingJian) != TierRenShangRen {
-		t.Errorf("顶尖降档应到人上人")
-	}
-	if DemotedTier(TierRenShangRen) != TierRenShangRen {
-		t.Errorf("人上人是地板，不再降")
-	}
-}
-
 func TestScorePoolFourFactors(t *testing.T) {
 	candidates := []Candidate{
 		{ID: "a", Tier: TierHang, Occasion: OccasionAny, Distance: 6, EverEaten: true},

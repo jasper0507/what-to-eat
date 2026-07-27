@@ -43,11 +43,10 @@ export function useCandidatePool() {
   });
 }
 
-export function useEatingRecords(limit = 20) {
+export function useEatingRecords() {
   return useQuery({
-    // 前缀仍是 historyKey：失效映射按前缀命中所有 limit 变体
-    queryKey: [...historyKey, limit] as const,
-    queryFn: ({ signal }) => api.listEatingRecords(limit, signal),
+    queryKey: historyKey,
+    queryFn: ({ signal }) => api.listEatingRecords(signal),
   });
 }
 

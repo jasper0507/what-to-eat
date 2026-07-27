@@ -39,7 +39,7 @@ export default function HistoryPage() {
         </div>
       ) : null}
       {records.isError ? (
-        <Notice tone="error" onRetry={() => void records.refetch()}>
+        <Notice onRetry={() => void records.refetch()}>
           {records.error.message}
         </Notice>
       ) : null}
@@ -228,7 +228,7 @@ function HistoryRow({
           ) : null}
         </div>
       ) : null}
-      {rate.error ? <Notice tone="error">{rate.error.message}</Notice> : null}
+      {rate.error ? <Notice>{rate.error.message}</Notice> : null}
     </li>
   );
 }

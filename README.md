@@ -109,13 +109,9 @@ npm run test:browser  # Playwright 全栈验收（自动构建并启动真实 Go
 | `CATALOG_DIR` | 空 | HowToCook `dishes` 目录，设置则启动时导入 |
 | `WEB_DIR` | `frontend/dist` | 前端构建产物目录 |
 | `APP_ENV` | 空 | `production` 时启用 Secure Cookie |
-| `DISCOVERY_*` | 见下 | 探索阈值，无需重编译即可调 |
 
-探索阈值：`DISCOVERY_ENABLED`、`DISCOVERY_MAX_POOL_SIZE`、
-`DISCOVERY_MAX_ELIGIBLE_DISHES`、`DISCOVERY_MIN_REROLLS`、
-`DISCOVERY_RECENT_MEAL_WINDOW`、`DISCOVERY_MAX_DISCOVERIES_PER_MEAL`。
-嵌入使用时也可从 `server.DefaultDiscoveryConfig()` 取默认值后经
-`server.Config.Discovery` 调整。
+探索阈值内建默认值；嵌入使用时可从 `server.DefaultDiscoveryConfig()`
+取默认值后经 `server.Config.Discovery` 调整。
 
 ## 单节点部署（Docker Compose）
 

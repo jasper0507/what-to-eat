@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -43,45 +42,13 @@ type Config struct {
 
 // ConfigFromEnv 从环境变量组装 Config，未设置的项使用默认值。
 // APP_ENV=production 同时启用 SecureCookies。
-// Discovery 阈值经 DISCOVERY_* 覆盖。
-func ConfigFromEnv() (Config, error) {
-	production := os.Getenv("APP_ENV") == "production"
-
-	discovery := DefaultDiscoveryConfig()
-	for name, apply := range map[string]func(string) error{
-		"DISCOVERY_ENABLED": func(value string) (err error) {
-			discovery.Enabled, err = strconv.ParseBool(value)
-			return err
-		},
-		"DISCOVERY_MAX_POOL_SIZE":            envInt(&discovery.MaxPoolSize),
-		"DISCOVERY_MAX_ELIGIBLE_DISHES":      envInt(&discovery.MaxEligibleDishes),
-		"DISCOVERY_MIN_REROLLS":              envInt(&discovery.MinRerolls),
-		"DISCOVERY_RECENT_MEAL_WINDOW":       envInt(&discovery.RecentMealWindow),
-		"DISCOVERY_MAX_DISCOVERIES_PER_MEAL": envInt(&discovery.MaxDiscoveriesPerMeal),
-	} {
-		value := os.Getenv(name)
-		if value == "" {
-			continue
-		}
-		if err := apply(value); err != nil {
-			return Config{}, fmt.Errorf("parse %s: %w", name, err)
-		}
-	}
-
+func ConfigFromEnv() Config {
 	return Config{
 		DatabasePath:  envOrDefault("DATABASE_PATH", "data/what-to-eat.db"),
 		SessionSecret: []byte(os.Getenv("SESSION_SECRET")),
-		SecureCookies: production,
+		SecureCookies: os.Getenv("APP_ENV") == "production",
 		WebDir:        envOrDefault("WEB_DIR", "frontend/dist"),
 		CatalogDir:    os.Getenv("CATALOG_DIR"),
-		Discovery:     &discovery,
-	}, nil
-}
-
-func envInt(target *int) func(string) error {
-	return func(value string) (err error) {
-		*target, err = strconv.Atoi(value)
-		return err
 	}
 }
 
@@ -113,9 +80,9 @@ func newApp(config Config, decisionRandom *mathrand.Rand) (*App, error) {
 	if len(config.SessionSecret) < 32 {
 		return nil, errors.New("SessionSecret must contain at least 32 bytes")
 	}
-	discovery, err := meal.NormalizeDiscoveryConfig(config.Discovery)
-	if err != nil {
-		return nil, fmt.Errorf("configure Discovery: %w", err)
+	discovery := DefaultDiscoveryConfig()
+	if config.Discovery != nil {
+		discovery = *config.Discovery
 	}
 	db, err := sql.Open("sqlite", config.DatabasePath)
 	if err != nil {

@@ -2,7 +2,6 @@ package server_test
 
 import (
 	"bytes"
-	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -98,11 +97,9 @@ func TestAuthenticatedEaterCanSearchCatalogByDishName(t *testing.T) {
 	}
 	var result struct {
 		Dishes []struct {
-			ID         string   `json:"id"`
-			Name       string   `json:"name"`
-			Category   string   `json:"category"`
-			RecipePath string   `json:"recipe_path"`
-			Tags       []string `json:"tags"`
+			ID       string `json:"id"`
+			Name     string `json:"name"`
+			Category string `json:"category"`
 		} `json:"dishes"`
 	}
 	if err := json.NewDecoder(response.Body).Decode(&result); err != nil {
@@ -112,11 +109,9 @@ func TestAuthenticatedEaterCanSearchCatalogByDishName(t *testing.T) {
 		t.Fatalf("dishes = %#v, want one match", result.Dishes)
 	}
 	dish := result.Dishes[0]
-	if dish.ID == "" ||
+	if dish.ID != "vegetable_dish/番茄炒蛋.md" ||
 		dish.Name != "番茄炒蛋" ||
-		dish.Category != "素菜" ||
-		dish.RecipePath != "vegetable_dish/番茄炒蛋.md" ||
-		len(dish.Tags) != 0 {
+		dish.Category != "素菜" {
 		t.Errorf("dish = %#v, want imported 番茄炒蛋 with stable metadata", dish)
 	}
 }
@@ -161,94 +156,6 @@ func TestRepeatedCatalogImportKeepsDishIdentity(t *testing.T) {
 	}
 	if firstImport[0].ID == "" || firstImport[0].ID != secondImport[0].ID {
 		t.Errorf("Dish IDs = (%q, %q), want the same non-empty identity", firstImport[0].ID, secondImport[0].ID)
-	}
-}
-
-func TestCatalogImportUpgradesLegacyCatalogSchema(t *testing.T) {
-	databasePath := filepath.Join(t.TempDir(), "what-to-eat.db")
-	db, err := sql.Open("sqlite", databasePath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.Exec(`
-		CREATE TABLE catalog_dishes (
-			id TEXT PRIMARY KEY,
-			source_path TEXT NOT NULL UNIQUE,
-			name TEXT NOT NULL,
-			category TEXT NOT NULL,
-			recipe TEXT NOT NULL,
-			tags TEXT NOT NULL
-		);
-		INSERT INTO catalog_dishes (id, source_path, name, category, recipe, tags)
-		VALUES ('legacy-id', 'drink/柠檬水.md', '旧柠檬水', '饮料', '旧 Recipe', '[]');
-	`); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	app := openCatalogApp(t, databasePath)
-	t.Cleanup(func() { app.Close() })
-	sessionCookie := registerCatalogEater(t, app)
-
-	request := httptest.NewRequest(http.MethodGet, "/api/catalog/dishes?q=柠檬水", nil)
-	request.AddCookie(sessionCookie)
-	response := httptest.NewRecorder()
-	app.ServeHTTP(response, request)
-	if response.Code != http.StatusOK {
-		t.Fatalf("search status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body)
-	}
-	var result struct {
-		Dishes []struct {
-			ID string `json:"id"`
-		} `json:"dishes"`
-	}
-	if err := json.NewDecoder(response.Body).Decode(&result); err != nil {
-		t.Fatal(err)
-	}
-	if len(result.Dishes) != 1 || result.Dishes[0].ID != "drink/柠檬水.md" {
-		t.Errorf("dishes = %#v, want migrated source path identity", result.Dishes)
-	}
-}
-
-func TestAppUpgradesPoolOnlyDecisionSchemaForDiscovery(t *testing.T) {
-	databasePath := filepath.Join(t.TempDir(), "what-to-eat.db")
-	db, err := sql.Open("sqlite", databasePath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.Exec(`
-		CREATE TABLE decisions (
-			id INTEGER PRIMARY KEY,
-			meal_id INTEGER NOT NULL REFERENCES meals(id) ON DELETE CASCADE,
-			dish_id TEXT NOT NULL REFERENCES catalog_dishes(source_path),
-			mode TEXT NOT NULL CHECK (mode = 'pool'),
-			status TEXT NOT NULL CHECK (status IN ('active', 'accepted')),
-			rerolled_to_id INTEGER REFERENCES decisions(id),
-			created_at INTEGER NOT NULL
-		);
-	`); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	discovery := server.DefaultDiscoveryConfig()
-	discovery.MaxPoolSize = 1
-	app, err := server.NewWithDecisionRandomSeedForTest(testConfig(t, databasePath, &discovery), 1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { app.Close() })
-	cookie := registerCandidateEater(t, app, "discovery_schema_eater")
-	addCandidatePoolDish(t, app, cookie, "vegetable_dish/番茄炒蛋.md", 5)
-
-	// 探索是概率触发的：反复开顿直到命中，验证升级后的 CHECK 接受 discovery 写入
-	decision := beginDiscoveryDecision(t, app, cookie)
-	if decision.Mode != "discovery" {
-		t.Errorf("Decision after schema upgrade = %#v, want Discovery mode to be accepted", decision)
 	}
 }
 

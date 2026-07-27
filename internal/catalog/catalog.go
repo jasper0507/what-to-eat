@@ -46,14 +46,12 @@ var howToCookCategories = map[string]string{
 // Difficulty/CookMinutes/Calories 是导入富化的信息小字素材，只有走
 // 元数据查询的路径（揭示、菜谱页）才会填充。
 type Dish struct {
-	ID          string   `json:"id"`
-	Name        string   `json:"name"`
-	Category    string   `json:"category"`
-	RecipePath  string   `json:"recipe_path"`
-	Tags        []string `json:"tags"`
-	Difficulty  *int     `json:"difficulty,omitempty"`
-	CookMinutes *int     `json:"cook_minutes,omitempty"`
-	Calories    *int     `json:"calories,omitempty"`
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Category    string `json:"category"`
+	Difficulty  *int   `json:"difficulty,omitempty"`
+	CookMinutes *int   `json:"cook_minutes,omitempty"`
+	Calories    *int   `json:"calories,omitempty"`
 }
 
 // Recipe 是 Dish 的烹饪说明视图。Images 是导入期收集的图片引用：
@@ -64,38 +62,26 @@ type Recipe struct {
 	Images  []string `json:"images"`
 }
 
-// Taxonomy 是 source_path 编码规则的唯一出处：首段是类别目录，末段是
-// Recipe 文件名，中间各段是标签。单段路径没有类别与标签。
-type Taxonomy struct {
-	Category string
-	Tags     []string
-}
-
-func PathTaxonomy(sourcePath string) Taxonomy {
-	parts := strings.Split(sourcePath, "/")
-	if len(parts) < 2 {
-		return Taxonomy{}
+// PathCategory 是 source_path 编码规则的唯一出处：首段是类别目录，末段是
+// Recipe 文件名。单段路径没有类别。
+func PathCategory(sourcePath string) string {
+	if category, _, ok := strings.Cut(sourcePath, "/"); ok {
+		return category
 	}
-	return Taxonomy{Category: parts[0], Tags: parts[1 : len(parts)-1]}
+	return ""
 }
 
 func NewDish(sourcePath, name string) Dish {
-	dish := Dish{
-		ID:         sourcePath,
-		Name:       name,
-		RecipePath: sourcePath,
-		Tags:       []string{},
-	}
-	taxonomy := PathTaxonomy(sourcePath)
-	if taxonomy.Category == "" {
+	dish := Dish{ID: sourcePath, Name: name}
+	category := PathCategory(sourcePath)
+	if category == "" {
 		dish.Category = "其他"
 		return dish
 	}
-	dish.Category = howToCookCategories[taxonomy.Category]
+	dish.Category = howToCookCategories[category]
 	if dish.Category == "" {
-		dish.Category = taxonomy.Category
+		dish.Category = category
 	}
-	dish.Tags = taxonomy.Tags
 	return dish
 }
 
@@ -196,7 +182,7 @@ func Profiles(
 		if err := rows.Scan(&sourcePath, &name, &ingredients, &flavors, &techniques); err != nil {
 			return nil, nil, err
 		}
-		profile := engine.Profile{Category: PathTaxonomy(sourcePath).Category}
+		profile := engine.Profile{Category: PathCategory(sourcePath)}
 		for _, pair := range []struct {
 			raw    string
 			target *[]string

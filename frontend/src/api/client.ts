@@ -7,25 +7,12 @@ import type { ApiErrorCode } from "./types";
 export class ApiError extends Error {
   readonly status: number;
   readonly code: ApiErrorCode;
-  readonly retryAfterSeconds?: number;
-  /** Retry-After 换算出的可重试时刻（构造时定格，供 UI 倒计时纯读取）。 */
-  readonly retryAtMs?: number;
 
-  constructor(
-    status: number,
-    code: ApiErrorCode,
-    message: string,
-    retryAfterSeconds?: number,
-  ) {
+  constructor(status: number, code: ApiErrorCode, message: string) {
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.code = code;
-    this.retryAfterSeconds = retryAfterSeconds;
-    this.retryAtMs =
-      retryAfterSeconds === undefined
-        ? undefined
-        : Date.now() + retryAfterSeconds * 1000;
   }
 }
 
@@ -76,9 +63,6 @@ export async function apiFetch<T>(
     }
   }
 
-  const retryAfterSeconds = parseRetryAfter(
-    response.headers.get("Retry-After"),
-  );
   let envelope: ErrorEnvelope | undefined;
   try {
     envelope = JSON.parse(text) as ErrorEnvelope;
@@ -92,16 +76,7 @@ export async function apiFetch<T>(
       response.status,
       "unexpected_response",
       copy.errors.unexpected,
-      retryAfterSeconds,
     );
   }
-  throw new ApiError(response.status, code, message, retryAfterSeconds);
-}
-
-function parseRetryAfter(value: string | null): number | undefined {
-  if (!value) {
-    return undefined;
-  }
-  const seconds = Number(value);
-  return Number.isFinite(seconds) && seconds >= 0 ? seconds : undefined;
+  throw new ApiError(response.status, code, message);
 }

@@ -45,7 +45,7 @@ export default function CandidatePoolPage() {
           </div>
         ) : null}
         {pool.isError ? (
-          <Notice tone="error" onRetry={() => void pool.refetch()}>
+          <Notice onRetry={() => void pool.refetch()}>
             {pool.error.message}
           </Notice>
         ) : null}
@@ -138,7 +138,7 @@ function PoolRow({ dish }: { dish: PoolDish }) {
         </div>
       ) : null}
       {(updateWeight.error ?? removeDish.error) ? (
-        <Notice tone="error" className="mt-2.5">
+        <Notice className="mt-2.5">
           {((updateWeight.error ?? removeDish.error) as Error).message}
         </Notice>
       ) : null}
@@ -192,11 +192,9 @@ function AddSection({ poolIds }: { poolIds: Set<string> }) {
         </Button>
       </form>
 
-      {addDish.error ? (
-        <Notice tone="error">{addDish.error.message}</Notice>
-      ) : null}
+      {addDish.error ? <Notice>{addDish.error.message}</Notice> : null}
       {search.isError ? (
-        <Notice tone="error" onRetry={() => void search.refetch()}>
+        <Notice onRetry={() => void search.refetch()}>
           {search.error.message}
         </Notice>
       ) : null}

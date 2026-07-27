@@ -2,13 +2,11 @@ import { Eye, EyeOff, LoaderCircle } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import { Navigate } from "react-router-dom";
 
-import { ApiError } from "@/api/client";
 import { useLogin, useRegister, useSession } from "@/api/hooks";
 import { peekSessionExpired } from "@/api/queryClient";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { useRetryAfter } from "@/lib/useRetryAfter";
 import { validatePassword, validateUsername } from "@/lib/validation";
 
 type Mode = "login" | "register";
@@ -33,7 +31,6 @@ export default function LoginPage() {
   const loginMutation = useLogin();
   const registerMutation = useRegister();
   const active = mode === "login" ? loginMutation : registerMutation;
-  const retryRemaining = useRetryAfter(active.error);
   // 只读不消费（幂等）；下次认证成功时由 useAuthMutation 清除
   const expired = peekSessionExpired();
 
@@ -82,9 +79,6 @@ export default function LoginPage() {
     active.mutate({ username, password });
   };
 
-  const apiError = active.error instanceof ApiError ? active.error : undefined;
-  const throttled = apiError?.code === "rate_limited" && retryRemaining > 0;
-
   return (
     <main className="flex min-h-dvh flex-col items-center justify-center bg-background px-6 pb-[10vh] font-sans text-base text-foreground antialiased">
       <div className="w-full max-w-[21.25rem]">
@@ -111,13 +105,6 @@ export default function LoginPage() {
               className="rounded-md border border-destructive/25 bg-destructive/5 px-3 py-2 text-sm text-destructive"
             >
               {active.error.message}
-              {throttled ? (
-                <>
-                  {/* 倒计时秒数只更新视觉；读屏挂载时播报一次静态提示 */}
-                  <span aria-hidden="true">（{retryRemaining} 秒后再试）</span>
-                  <span className="sr-only">稍后再试</span>
-                </>
-              ) : null}
             </div>
           ) : null}
 
@@ -201,7 +188,7 @@ export default function LoginPage() {
             size="lg"
             className="mt-2 w-full"
             aria-busy={active.isPending}
-            disabled={active.isPending || retryRemaining > 0}
+            disabled={active.isPending}
           >
             {active.isPending ? (
               <LoaderCircle

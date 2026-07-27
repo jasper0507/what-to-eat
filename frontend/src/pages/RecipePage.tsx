@@ -18,7 +18,7 @@ export default function RecipePage() {
   return (
     <div className="animate-rise mx-auto max-w-3xl space-y-8">
       {dishId === "" ? (
-        <Notice tone="error">地址少了菜名，回主页重新开一顿吧。</Notice>
+        <Notice>地址少了菜名，回主页重新开一顿吧。</Notice>
       ) : null}
       {recipe.isPending && dishId !== "" ? (
         <div
@@ -33,7 +33,7 @@ export default function RecipePage() {
         </div>
       ) : null}
       {recipe.isError ? (
-        <Notice tone="error" onRetry={() => void recipe.refetch()}>
+        <Notice onRetry={() => void recipe.refetch()}>
           {recipe.error.message}
         </Notice>
       ) : null}

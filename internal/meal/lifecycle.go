@@ -88,23 +88,6 @@ func DefaultDiscoveryConfig() DiscoveryConfig {
 	}
 }
 
-func NormalizeDiscoveryConfig(config *DiscoveryConfig) (DiscoveryConfig, error) {
-	if config == nil {
-		return DefaultDiscoveryConfig(), nil
-	}
-	if !config.Enabled {
-		return *config, nil
-	}
-	if config.MaxPoolSize < 0 ||
-		config.MaxEligibleDishes < 0 ||
-		config.MinRerolls < 1 ||
-		config.RecentMealWindow < 0 ||
-		config.MaxDiscoveriesPerMeal < 1 {
-		return DiscoveryConfig{}, errors.New("invalid Discovery config")
-	}
-	return *config, nil
-}
-
 func New(
 	db *sql.DB,
 	candidates *pool.Pool,
@@ -177,6 +160,25 @@ func (m *Lifecycle) randomFloat() float64 {
 	m.randomMu.Lock()
 	defer m.randomMu.Unlock()
 	return m.random.Float64()
+}
+
+// weightedPick 按权重轮盘赌抽样：random ∈ [0,1) 定格在总权重轴上，
+// 逐项递减落在谁身上就选谁。
+func weightedPick[T any](random float64, items []T, weightOf func(T) float64) T {
+	total := 0.0
+	for _, item := range items {
+		total += weightOf(item)
+	}
+	target := random * total
+	selected := items[len(items)-1]
+	for _, item := range items {
+		target -= weightOf(item)
+		if target < 0 {
+			selected = item
+			break
+		}
+	}
+	return selected
 }
 
 func scanActiveDecision(row *sql.Row) (State, error) {
@@ -296,7 +298,7 @@ func hasDecidablePool(
 		if err := rows.Scan(&dishID); err != nil {
 			return false, err
 		}
-		if engine.ClassifyOccasion(catalog.PathTaxonomy(dishID).Category) != engine.OccasionNever {
+		if engine.ClassifyOccasion(catalog.PathCategory(dishID)) != engine.OccasionNever {
 			return true, nil
 		}
 	}
@@ -475,7 +477,7 @@ func (m *Lifecycle) poolCandidates(
 		lastSequence, everEaten := snapshot.lastAccepted[candidate.ID]
 		candidate.EverEaten = everEaten
 		candidate.Distance = int(snapshot.totalRecords - lastSequence)
-		candidate.Occasion = engine.ClassifyOccasion(catalog.PathTaxonomy(candidate.ID).Category)
+		candidate.Occasion = engine.ClassifyOccasion(catalog.PathCategory(candidate.ID))
 		candidate.ShownThisMeal = shown[candidate.ID] > 0
 		snapshot.tiers[candidate.ID] = candidate.Tier
 		snapshot.candidates = append(snapshot.candidates, candidate)
@@ -619,7 +621,7 @@ func (m *Lifecycle) discoveryDish(
 			continue
 		}
 		occasion := engine.OccasionFactor(
-			engine.ClassifyOccasion(catalog.PathTaxonomy(dishID).Category),
+			engine.ClassifyOccasion(catalog.PathCategory(dishID)),
 			hour,
 		)
 		if occasion == 0 {
@@ -649,19 +651,11 @@ func (m *Lifecycle) discoveryDish(
 		return decisionChoice{}, false, nil
 	}
 
-	totalWeight := 0.0
-	for _, candidate := range candidates {
-		totalWeight += candidate.weight
-	}
-	target := m.randomFloat() * totalWeight
-	selected := candidates[len(candidates)-1]
-	for _, candidate := range candidates {
-		target -= candidate.weight
-		if target < 0 {
-			selected = candidate
-			break
-		}
-	}
+	selected := weightedPick(
+		m.randomFloat(),
+		candidates,
+		func(candidate discoveryCandidate) float64 { return candidate.weight },
+	)
 	reason := engine.ComposeReason(engine.ReasonInput{
 		Discovery: &engine.DiscoveryReason{
 			ReferenceName: selected.reference,
@@ -730,19 +724,11 @@ func (m *Lifecycle) chooseDecision(
 		return decisionChoice{}, ErrCandidatePoolEmpty
 	}
 
-	totalWeight := 0.0
-	for _, entry := range weighted {
-		totalWeight += entry.Weight
-	}
-	target := m.randomFloat() * totalWeight
-	selected := weighted[len(weighted)-1]
-	for _, entry := range weighted {
-		target -= entry.Weight
-		if target < 0 {
-			selected = entry
-			break
-		}
-	}
+	selected := weightedPick(
+		m.randomFloat(),
+		weighted,
+		func(entry engine.Weighted) float64 { return entry.Weight },
+	)
 	reason := engine.ComposeReason(engine.ReasonInput{
 		Relaxation: relaxation,
 		Tier:       selected.Candidate.Tier,

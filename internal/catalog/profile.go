@@ -173,7 +173,6 @@ type Enrichment struct {
 // sourcePath 用于品类桶与相对图片引用的归位。
 func Enrich(sourcePath, name, content string) Enrichment {
 	sections := splitSections(content)
-	taxonomy := PathTaxonomy(sourcePath)
 
 	enrichment := Enrichment{
 		Profile: engine.Profile{
@@ -181,7 +180,7 @@ func Enrich(sourcePath, name, content string) Enrichment {
 			Flavors:     matchTerms(flavorTerms, name+"\n"+sections.description, ""),
 			// 工艺默认只认菜名；带 |steps 标记的词条才看步骤（ADR-0022）
 			Techniques: matchTerms(techniqueTerms, name, sections.steps),
-			Category:   taxonomy.Category,
+			Category:   PathCategory(sourcePath),
 		},
 		Images: parseImages(sourcePath, content),
 	}

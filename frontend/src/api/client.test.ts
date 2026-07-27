@@ -2,12 +2,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ApiError, apiFetch } from "./client";
 
-function jsonResponse(
-  status: number,
-  body: unknown,
-  headers?: Record<string, string>,
-): Response {
-  return new Response(JSON.stringify(body), { status, headers });
+function jsonResponse(status: number, body: unknown): Response {
+  return new Response(JSON.stringify(body), { status });
 }
 
 function stubFetch(result: Response | Error): ReturnType<typeof vi.fn> {
@@ -74,42 +70,6 @@ describe("apiFetch", () => {
     stubFetch(new Response("<!doctype html><html></html>", { status: 200 }));
     const error = (await caughtError(apiFetch("GET", "/api/typo"))) as ApiError;
     expect(error.code).toBe("unexpected_response");
-  });
-
-  it("捕获 429 的 Retry-After 秒数", async () => {
-    stubFetch(
-      jsonResponse(
-        429,
-        {
-          error: {
-            code: "rate_limited",
-            message: "操作过于频繁，请稍后再试",
-          },
-        },
-        { "Retry-After": "60" },
-      ),
-    );
-    const error = (await caughtError(
-      apiFetch("POST", "/api/x", {
-        body: { message: "hi" },
-      }),
-    )) as ApiError;
-    expect(error.code).toBe("rate_limited");
-    expect(error.retryAfterSeconds).toBe(60);
-  });
-
-  it("非法 Retry-After 值被忽略", async () => {
-    stubFetch(
-      jsonResponse(
-        429,
-        { error: { code: "rate_limited", message: "太快了" } },
-        {
-          "Retry-After": "soon",
-        },
-      ),
-    );
-    const error = (await caughtError(apiFetch("POST", "/api/x"))) as ApiError;
-    expect(error.retryAfterSeconds).toBe(undefined);
   });
 
   it("网络失败归一为 network_error（status 0）", async () => {

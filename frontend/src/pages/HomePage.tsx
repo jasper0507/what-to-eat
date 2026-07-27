@@ -56,7 +56,7 @@ export default function HomePage() {
       <div className="mx-auto w-full max-w-3xl lg:my-auto">
         <Stage>
           <div className="flex min-h-72 items-center justify-center px-6">
-            <Notice tone="error" onRetry={() => void meal.refetch()}>
+            <Notice onRetry={() => void meal.refetch()}>
               {meal.error.message}
             </Notice>
           </div>
@@ -88,7 +88,7 @@ export default function HomePage() {
   return (
     <Cockpit>
       {mutationError ? (
-        <Notice tone="error">{(mutationError as Error).message}</Notice>
+        <Notice>{(mutationError as Error).message}</Notice>
       ) : null}
 
       {decision ? (
@@ -391,12 +391,8 @@ function ExhaustedExits({
       <p className="border-t border-border pt-4 text-sm text-muted-foreground">
         换菜次数用完了。这顿的结局你来定：
       </p>
-      {handPick.error ? (
-        <Notice tone="error">{handPick.error.message}</Notice>
-      ) : null}
-      {abandon.error ? (
-        <Notice tone="error">{abandon.error.message}</Notice>
-      ) : null}
+      {handPick.error ? <Notice>{handPick.error.message}</Notice> : null}
+      {abandon.error ? <Notice>{abandon.error.message}</Notice> : null}
       <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
         <Button
           variant="ghost"
@@ -439,7 +435,7 @@ function ExhaustedExits({
           ) : null}
           {pool.isError ? (
             <div className="p-3">
-              <Notice tone="error" onRetry={() => void pool.refetch()}>
+              <Notice onRetry={() => void pool.refetch()}>
                 {pool.error.message}
               </Notice>
             </div>
@@ -501,9 +497,7 @@ function EmptyPoolWelcome() {
               放几道你爱吃的进来，这一顿才有得挑。
             </p>
           </div>
-          {starter.error ? (
-            <Notice tone="error">{starter.error.message}</Notice>
-          ) : null}
+          {starter.error ? <Notice>{starter.error.message}</Notice> : null}
           <div className="flex w-full max-w-xs flex-col gap-2">
             <Button
               size="lg"
@@ -556,7 +550,7 @@ function PendingRatingsGate({
             好不好吃，一句话的事；说完就能开新的一顿。
           </p>
         </div>
-        {rate.error ? <Notice tone="error">{rate.error.message}</Notice> : null}
+        {rate.error ? <Notice>{rate.error.message}</Notice> : null}
         <ul className="space-y-4">
           {pendingRatings.map((pending) => (
             <li

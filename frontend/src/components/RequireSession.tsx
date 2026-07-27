@@ -26,7 +26,7 @@ export default function RequireSession() {
   if (session.isError) {
     return (
       <main className="flex min-h-dvh items-center justify-center bg-background px-6 font-sans text-base text-foreground antialiased">
-        <Notice tone="error" onRetry={() => void session.refetch()}>
+        <Notice onRetry={() => void session.refetch()}>
           {session.error.message}
         </Notice>
       </main>

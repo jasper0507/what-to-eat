@@ -12,12 +12,10 @@ import (
 )
 
 type candidateDish struct {
-	ID         string   `json:"id"`
-	Name       string   `json:"name"`
-	Category   string   `json:"category"`
-	RecipePath string   `json:"recipe_path"`
-	Tags       []string `json:"tags"`
-	Tier       int      `json:"tier"`
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Category string `json:"category"`
+	Tier     int    `json:"tier"`
 }
 
 func candidatePoolRequest(
@@ -104,7 +102,6 @@ func TestEaterCanAddCatalogDishToCandidatePool(t *testing.T) {
 	if dish.ID != "vegetable_dish/番茄炒蛋.md" ||
 		dish.Name != "番茄炒蛋" ||
 		dish.Category != "素菜" ||
-		dish.RecipePath != dish.ID ||
 		dish.Tier != 4 {
 		t.Errorf("dish = %#v, want 番茄炒蛋 at 顶尖", dish)
 	}

@@ -12,10 +12,7 @@ import (
 )
 
 func main() {
-	config, err := server.ConfigFromEnv()
-	if err != nil {
-		log.Fatal(err)
-	}
+	config := server.ConfigFromEnv()
 	if err := os.MkdirAll(filepath.Dir(config.DatabasePath), 0o750); err != nil {
 		log.Fatal(err)
 	}

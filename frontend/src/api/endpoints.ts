@@ -137,18 +137,17 @@ export function abandonMeal(): Promise<MealState> {
 /** 三出口·亲自点一道：仅 Reroll budget 耗尽时解锁（否则 hand_pick_locked）。 */
 export function handPickDish(dishId: string): Promise<AcceptanceResponse> {
   return apiFetch("POST", "/api/meals/hand-pick", {
-    body: { dish_id: dishId, local_hour: localHour() },
+    body: { dish_id: dishId },
   });
 }
 
-/** 轻历史：最近吃过、评过几档、现在池里几档。 */
+/** 轻历史：最近吃过、评过几档、现在池里几档（服务端默认最近 20 条）。 */
 export async function listEatingRecords(
-  limit: number,
   signal?: AbortSignal,
 ): Promise<EatingRecordEntry[]> {
   const response = await apiFetch<{ records: EatingRecordEntry[] }>(
     "GET",
-    `/api/eating-records?limit=${limit}`,
+    "/api/eating-records",
     { signal },
   );
   return response.records;
