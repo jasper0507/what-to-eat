@@ -75,8 +75,13 @@ npm run dev
 
 ### 导入 HowToCook 菜谱库
 
+菜谱图走 Git LFS。只 `git clone` 不拉 LFS 时，本地 `*.jpg` 等只是
+pointer 文本，菜谱页会看不到图。需要本机装好 `git-lfs`：
+
 ```bash
+git lfs install
 git clone https://github.com/Anduin2017/HowToCook.git
+# 若克隆时跳过了 smudge：cd HowToCook && git lfs pull
 CATALOG_DIR=/path/to/HowToCook/dishes go run ./cmd/server
 ```
 
@@ -126,7 +131,8 @@ docker compose ps
 ```
 
 镜像固定打包 HowToCook 菜谱库的
-`c05758fa661ac4efa0361a987b700a351a22159b` 版本，`/api` 与前端
+`c05758fa661ac4efa0361a987b700a351a22159b` 版本（构建阶段 `git lfs pull`
+拉取真实菜谱图，不用 GitHub archive，避免只打进 LFS pointer），`/api` 与前端
 由同一个非 root 容器在 `8080` 端口提供。SQLite 数据保存在 Compose 命名卷
 `what_to_eat_data` 中。生产会话 Cookie 启用 `Secure`、`HttpOnly` 和
 `SameSite=Lax`：对外访问须走 HTTPS（反代或隧道终结 TLS）。`APP_ENV=production`
