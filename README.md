@@ -127,10 +127,40 @@ docker compose ps
 `c05758fa661ac4efa0361a987b700a351a22159b` 版本，`/api` 与前端
 由同一个非 root 容器在 `8080` 端口提供。SQLite 数据保存在 Compose 命名卷
 `what_to_eat_data` 中。生产会话 Cookie 启用 `Secure`、`HttpOnly` 和
-`SameSite=Lax`，浏览器访问应由同机反向代理提供 HTTPS。
+`SameSite=Lax`：浏览器必须走 HTTPS，否则 cookie 写不进去会立刻「登录过期」。
+`APP_ENV=production` 时，若反代注入 `X-Forwarded-Proto: http`，应用会 308
+到 HTTPS，并在 HTTPS 响应上挂 HSTS。边缘（如 Cloudflare Always Use HTTPS）
+与应用层双开更稳。
 
 `SESSION_SECRET` 缺失时 Compose 拒绝启动；会话秘密短于 32 字节或
 SQLite 卷不可写时，应用输出明确错误并退出。不要把 `.env` 提交进版本库。
+
+### 查看数据库
+
+库是卷里的单个文件 `/app/data/what-to-eat.db`。先拷只读副本再查，避免锁库：
+
+```bash
+docker compose cp app:/app/data/what-to-eat.db /tmp/what-to-eat-ro.db
+sqlite3 /tmp/what-to-eat-ro.db '.tables'
+sqlite3 /tmp/what-to-eat-ro.db 'SELECT id, username FROM accounts;'
+sqlite3 /tmp/what-to-eat-ro.db 'SELECT COUNT(*) FROM catalog_dishes;'
+```
+
+表结构以 [`internal/schema/schema.go`](internal/schema/schema.go) 为准。
+
+### 发版更新
+
+```bash
+# 本机或构建机
+docker compose build
+docker compose up -d
+# 确认健康
+curl -sS http://127.0.0.1:8080/api/healthz
+```
+
+数据在命名卷里，重建镜像不丢库；**不要** `docker compose down -v`。
+改代码后跑一遍 `go test ./...` 与（有 UI 改动时）`npm run test:browser`。
+`SESSION_SECRET` 换掉会使全部会话失效，日常发版保持原值。
 
 ## 备份与恢复
 

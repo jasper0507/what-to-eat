@@ -131,6 +131,13 @@ func (a *App) routes(webDir, catalogDir string) {
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
 	router.Use(gin.Recovery())
+	// production 下 cookie 带 Secure：若边缘仍放行明文 HTTP，浏览器会丢掉
+	// Set-Cookie，客户端已写入会话态 → 下一请求 401 →「登录过期」。
+	// 以 X-Forwarded-Proto 为准（cloudflared / 反代注入）；直连无此头不重定向，
+	// 避免容器健康检查被 308。
+	if a.secureCookies {
+		router.Use(forceHTTPS)
+	}
 	router.GET("/api/healthz", func(context *gin.Context) {
 		context.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
@@ -190,6 +197,21 @@ func writeError(context *gin.Context, status int, code, message string) {
 			"message": message,
 		},
 	})
+}
+
+// forceHTTPS：反代声明客户端走了 http 时 308 到 https，并在 https 上挂 HSTS。
+func forceHTTPS(context *gin.Context) {
+	switch context.GetHeader("X-Forwarded-Proto") {
+	case "http":
+		target := "https://" + context.Request.Host + context.Request.URL.RequestURI()
+		context.Redirect(http.StatusPermanentRedirect, target)
+		context.Abort()
+	case "https":
+		context.Header("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+		context.Next()
+	default:
+		context.Next()
+	}
 }
 
 // statusClientClosedRequest 是 nginx 惯例的 499：客户端已离场。
