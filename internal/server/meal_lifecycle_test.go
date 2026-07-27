@@ -774,14 +774,19 @@ func TestDiscoveryDrawsFromTasteProfileSimilarityWithReason(t *testing.T) {
 	addCandidatePoolDish(t, app, cookie, tomatoEgg, 5)
 
 	discovery := beginDiscoveryDecision(t, app, cookie)
-	// 口味画像相似度：与番茄炒蛋共享主料「番茄」的菜才有非零权重
+	// 口味画像相似度门槛：对番茄炒蛋相似度非零的菜才可能被抽中。共享主料
+	// 「番茄」是大头（权重 10/12/12），同品类命中也占 1 分（红烧茄子、
+	// 蒜蓉西兰花，权重各 2）；零相似（白粥、宫保鸡丁、鱼香肉丝、冬瓜排骨汤）
+	// 与场合永零（柠檬水）绝不出现。
 	similar := map[string]bool{
-		"vegetable_dish/番茄豆腐.md": true,
-		"vegetable_dish/番茄土豆.md": true,
-		tomatoBeef:               true,
+		"vegetable_dish/番茄豆腐.md":  true,
+		"vegetable_dish/番茄土豆.md":  true,
+		tomatoBeef:                true,
+		"vegetable_dish/红烧茄子.md":  true,
+		"vegetable_dish/蒜蓉西兰花.md": true,
 	}
 	if !similar[discovery.Dish.ID] {
-		t.Errorf("Discovery Dish = %q, want a Dish sharing 番茄 with 番茄炒蛋", discovery.Dish.ID)
+		t.Errorf("Discovery Dish = %q, want a Dish with nonzero similarity to 番茄炒蛋", discovery.Dish.ID)
 	}
 	if !strings.Contains(discovery.Reason, "番茄炒蛋") ||
 		!strings.Contains(discovery.Reason, "试试新的") {

@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"errors"
 	"math/rand"
+	"slices"
 	"sync"
 	"time"
 
@@ -615,8 +616,16 @@ func (m *Lifecycle) discoveryDish(
 		reference string
 		hits      engine.SimilarityHits
 	}
+	// 候选序按 dishID 排定：种子注入承诺同种子同行为（测试确定性），
+	// 抽样序不能来自 map 迭代。
+	dishIDs := make([]string, 0, len(profiles))
+	for dishID := range profiles {
+		dishIDs = append(dishIDs, dishID)
+	}
+	slices.Sort(dishIDs)
 	candidates := make([]discoveryCandidate, 0)
-	for dishID, profile := range profiles {
+	for _, dishID := range dishIDs {
+		profile := profiles[dishID]
 		if _, inPool := snapshot.tiers[dishID]; inPool || rejected[dishID] || shown[dishID] > 0 {
 			continue
 		}
