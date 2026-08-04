@@ -8,6 +8,11 @@ import { Notice } from "@/components/Notice";
 import { TierBadge, TierScale } from "@/components/TierBadge";
 import { Button } from "@/components/ui/button";
 import { mealAtISO } from "@/lib/format";
+import {
+  canRateHistoryEntry,
+  historyModeNote,
+  isRecentFavorite,
+} from "@/lib/tastePolicy";
 import { RATING_TIERS } from "@/lib/tiers";
 
 // 轻历史：最近吃过 / 最近爱吃。补评分是邀请，不是义务——绝不拦路。
@@ -82,7 +87,7 @@ export default function HistoryPage() {
 function Favorites({ records }: { records: EatingRecordEntry[] }) {
   const seen = new Set<string>();
   const loved = records.filter((record) => {
-    if (!record.rating || record.rating < 4 || seen.has(record.dish.id)) {
+    if (!isRecentFavorite(record.rating) || seen.has(record.dish.id)) {
       return false;
     }
     seen.add(record.dish.id);
@@ -119,12 +124,6 @@ const dateFormatter = new Intl.DateTimeFormat("zh-CN", {
   hour12: false,
 });
 
-const MODE_NOTES: Record<EatingRecordEntry["mode"], string | null> = {
-  pool: null,
-  discovery: "新尝试",
-  hand_pick: "亲自点的",
-};
-
 /** 标出每道菜最近的一条记录（列表本身最新在前，首见即最近）。 */
 function markLatest(records: EatingRecordEntry[]) {
   const seen = new Set<string>();
@@ -148,9 +147,12 @@ function HistoryRow({
 }) {
   const [rating, setRating] = useState(false);
   const rate = useRateRecord();
-  const modeNote = MODE_NOTES[record.mode];
-  // 未评的入口只给每道菜最近一条；池子还没看清前先留白，免得按钮闪变
-  const canRate = !record.rating && latestOfDish && !poolPending;
+  const modeNote = historyModeNote(record.mode);
+  const canRate = canRateHistoryEntry({
+    rating: record.rating,
+    latestOfDish,
+    poolPending,
+  });
 
   return (
     <li className="space-y-3 px-4 py-3">

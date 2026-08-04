@@ -1,6 +1,6 @@
-// Package pool 拥有 Candidate pool 的 membership 与 Preference weight
-// 不变量，以及 rejection mark 的全部写侧语义。候选选择
-// （cooldown/recency/加权抽样）依 ADR-0019 留在 meal.Lifecycle。
+// Package pool 拥有 Candidate pool 的 membership 与档位（tier）不变量，
+// 以及 rejection mark 与自动降档的全部写侧语义。候选选择
+// （四因子评分 / Discovery）依 ADR-0019 留在 meal.Lifecycle。
 package pool
 
 import (
@@ -9,6 +9,7 @@ import (
 	"errors"
 
 	"github.com/jasper0507/what-to-eat/internal/catalog"
+	"github.com/jasper0507/what-to-eat/internal/engine"
 )
 
 var ErrDishRejected = errors.New("Dish carries a rejection mark")
@@ -218,6 +219,72 @@ func (p *Pool) Reject(
 		accountID,
 		dishID,
 		rating,
+	)
+	return err
+}
+
+// RecordSwap 落一次「被换」：达阈值时降一档（地板人上人）并清零计数。
+// 菜已不在池中时计数照落、降档 UPDATE 自然无事发生。
+func (p *Pool) RecordSwap(
+	context context.Context,
+	transaction *sql.Tx,
+	accountID int64,
+	dishID string,
+) error {
+	if _, err := transaction.ExecContext(
+		context,
+		`INSERT INTO pool_demotions (account_id, dish_id, swaps)
+		 VALUES (?, ?, 1)
+		 ON CONFLICT(account_id, dish_id) DO UPDATE SET swaps = swaps + 1`,
+		accountID,
+		dishID,
+	); err != nil {
+		return err
+	}
+	var swaps int
+	if err := transaction.QueryRowContext(
+		context,
+		"SELECT swaps FROM pool_demotions WHERE account_id = ? AND dish_id = ?",
+		accountID,
+		dishID,
+	).Scan(&swaps); err != nil {
+		return err
+	}
+	if swaps < engine.DemotionSwapThreshold {
+		return nil
+	}
+	if _, err := transaction.ExecContext(
+		context,
+		`UPDATE candidate_pool
+		 SET tier = MAX(?, tier - 1)
+		 WHERE account_id = ? AND dish_id = ?`,
+		engine.TierRenShangRen,
+		accountID,
+		dishID,
+	); err != nil {
+		return err
+	}
+	_, err := transaction.ExecContext(
+		context,
+		"UPDATE pool_demotions SET swaps = 0 WHERE account_id = ? AND dish_id = ?",
+		accountID,
+		dishID,
+	)
+	return err
+}
+
+// ResetSwaps 任何接受即清零该菜的连换计数。
+func (p *Pool) ResetSwaps(
+	context context.Context,
+	transaction *sql.Tx,
+	accountID int64,
+	dishID string,
+) error {
+	_, err := transaction.ExecContext(
+		context,
+		"DELETE FROM pool_demotions WHERE account_id = ? AND dish_id = ?",
+		accountID,
+		dishID,
 	)
 	return err
 }

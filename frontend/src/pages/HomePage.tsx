@@ -2,7 +2,6 @@ import { LoaderCircle } from "lucide-react";
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
-import { ApiError } from "@/api/client";
 import {
   useAbandonMeal,
   useAccept,
@@ -21,11 +20,17 @@ import { TierBadge, TierScale } from "@/components/TierBadge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { formatMealAt, mealAtISO } from "@/lib/format";
+import {
+  DISCOVERY_STAGE_BADGE,
+  isDiscoveryMode,
+  shouldSuppressStageError,
+  toStage,
+} from "@/lib/stage";
 import { STARTER_PACK } from "@/lib/starterPack";
 import { DEFAULT_POOL_TIER, RATING_TIERS, TIER_LABELS } from "@/lib/tiers";
 
-// 主界面 = Decision stage 的舞台位：三态互斥（空池引导 / 待评分拦截 / 就绪开饭），
-// 揭示就地完成，无路由跳转；接受才离场（去菜谱页）。
+// 主界面 = Decision stage 的 adapter：stage 纯模型解释 MealState，
+// 本文件只做 model → JSX 与 mutation 绑定。
 export default function HomePage() {
   const navigate = useNavigate();
   const meal = useMealState();
@@ -67,23 +72,24 @@ export default function HomePage() {
   if (!meal.data) {
     return null;
   }
-  const state = meal.data;
+  const stage = toStage(meal.data);
+  const mutationError = visibleError(
+    accept.error ?? reroll.error ?? begin.error,
+  );
 
-  if (state.status === "candidate_pool_empty") {
+  if (stage.kind === "empty_pool") {
     return <EmptyPoolWelcome />;
   }
-  if (state.status === "pending_ratings") {
+  if (stage.kind === "pending_ratings") {
     return (
       <Cockpit>
-        <PendingRatingsGate pendingRatings={state.pending_ratings} />
+        <PendingRatingsGate pendingRatings={stage.pendingRatings} />
       </Cockpit>
     );
   }
 
-  const decision = state.status === "active_decision" ? state.decision : null;
-  const mutationError = visibleError(
-    accept.error ?? reroll.error ?? begin.error,
-  );
+  const active =
+    stage.kind === "reveal" || stage.kind === "exhausted" ? stage : null;
 
   return (
     <Cockpit>
@@ -91,17 +97,16 @@ export default function HomePage() {
         <Notice>{(mutationError as Error).message}</Notice>
       ) : null}
 
-      {decision ? (
+      {active ? (
         <Reveal
-          decision={decision}
-          rerollsRemaining={
-            state.status === "active_decision" ? state.rerolls_remaining : 0
-          }
+          decision={active.decision}
+          rerollsRemaining={active.rerollsRemaining}
+          exhausted={active.kind === "exhausted"}
           rerolling={reroll.isPending}
           accepting={accept.isPending}
-          onReroll={() => reroll.mutate(decision.id)}
+          onReroll={() => reroll.mutate(active.decision.id)}
           onAccept={() =>
-            accept.mutate(decision.id, {
+            accept.mutate(active.decision.id, {
               onSuccess: (result) => {
                 void navigate(
                   `/recipes?dish_id=${encodeURIComponent(result.recipe.dish.id)}`,
@@ -258,15 +263,8 @@ function shortDate(unixSeconds: number): string {
   return shortDateFormatter.format(new Date(unixSeconds * 1000));
 }
 
-// 这两个 409 语义是「界面陈旧」而非失败：hooks 已 invalidate，
-// 界面会自己变成正确状态，不该再弹错误。
 function visibleError(error: unknown): unknown {
-  if (
-    error instanceof ApiError &&
-    (error.code === "pending_ratings" ||
-      error.code === "candidate_pool_empty" ||
-      error.code === "reroll_budget_exhausted")
-  ) {
+  if (shouldSuppressStageError(error)) {
     return null;
   }
   return error;
@@ -276,6 +274,7 @@ function visibleError(error: unknown): unknown {
 function Reveal({
   decision,
   rerollsRemaining,
+  exhausted,
   rerolling,
   accepting,
   onReroll,
@@ -283,12 +282,12 @@ function Reveal({
 }: {
   decision: Decision;
   rerollsRemaining: number;
+  exhausted: boolean;
   rerolling: boolean;
   accepting: boolean;
   onReroll: () => void;
   onAccept: () => void;
 }) {
-  const exhausted = rerollsRemaining <= 0;
   const busy = rerolling || accepting;
   const meta = dishMeta(decision.dish);
 
@@ -297,9 +296,9 @@ function Reveal({
       <div className="flex min-h-72 flex-col px-6 py-8 sm:px-10 lg:min-h-96 lg:px-12 lg:py-10">
         <p className="text-sm text-muted-foreground">
           这一顿
-          {decision.mode === "discovery" ? (
+          {isDiscoveryMode(decision.mode) ? (
             <span className="ml-2 inline-flex h-6 items-center rounded-full border border-brand/30 bg-brand/10 px-2.5 text-sm text-brand-ink">
-              池子外的新尝试
+              {DISCOVERY_STAGE_BADGE}
             </span>
           ) : null}
         </p>

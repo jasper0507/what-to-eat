@@ -267,3 +267,102 @@ func TestComposeReasonNeverEmpty(t *testing.T) {
 		}
 	}
 }
+
+func TestScoreDiscoveryWeightFormula(t *testing.T) {
+	// 相似度：5×主料 + 1×品类 = 6；× 夯 2.0 × 场合 1 × 新鲜感 1 = 12
+	refs := []DiscoveryReference{{
+		ID:   "pool/ref",
+		Name: "口水鸡",
+		Tier: TierHang,
+		Profile: Profile{
+			Ingredients: []string{"鸡肉"},
+			Category:    "meat_dish",
+		},
+	}}
+	candidates := []DiscoveryCandidate{{
+		ID:       "out/a",
+		Name:     "白切鸡",
+		Profile:  Profile{Ingredients: []string{"鸡肉"}, Category: "meat_dish"},
+		Occasion: OccasionAny,
+	}}
+	got := ScoreDiscovery(candidates, refs, 12)
+	if len(got) != 1 {
+		t.Fatalf("len = %d, want 1", len(got))
+	}
+	// 5×1 主料 + 1 品类 = 6；× 夯 2.0 = 12
+	if math.Abs(got[0].Weight-12) > 1e-9 {
+		t.Errorf("weight = %v, want 12", got[0].Weight)
+	}
+	if got[0].ReferenceName != "口水鸡" {
+		t.Errorf("reference = %q", got[0].ReferenceName)
+	}
+}
+
+func TestScoreDiscoveryDropsZeroOccasionAndFreshness(t *testing.T) {
+	refs := []DiscoveryReference{{
+		ID: "r", Name: "ref", Tier: TierDingJian,
+		Profile: Profile{Ingredients: []string{"豆腐"}, Category: "vegetable_dish"},
+	}}
+	candidates := []DiscoveryCandidate{
+		{
+			ID: "never", Name: "柠檬水",
+			Profile:  Profile{Ingredients: []string{"豆腐"}, Category: "drink"},
+			Occasion: OccasionNever,
+		},
+		{
+			ID: "cooldown", Name: "刚吃过",
+			Profile:   Profile{Ingredients: []string{"豆腐"}, Category: "vegetable_dish"},
+			Occasion:  OccasionAny,
+			Distance:  1,
+			EverEaten: true,
+		},
+		{
+			ID: "ok", Name: "可以",
+			Profile:  Profile{Ingredients: []string{"豆腐"}, Category: "vegetable_dish"},
+			Occasion: OccasionAny,
+		},
+	}
+	got := ScoreDiscovery(candidates, refs, 12)
+	if len(got) != 1 || got[0].ID != "ok" {
+		t.Fatalf("got %#v, want only ok", got)
+	}
+}
+
+func TestScoreDiscoveryPicksBestReferenceByLove(t *testing.T) {
+	// 同一相似度下，夯参照应压过顶尖参照。
+	refs := []DiscoveryReference{
+		{
+			ID: "low", Name: "人上人参照", Tier: TierRenShangRen,
+			Profile: Profile{Ingredients: []string{"鸡蛋"}, Category: "vegetable_dish"},
+		},
+		{
+			ID: "high", Name: "夯参照", Tier: TierHang,
+			Profile: Profile{Ingredients: []string{"鸡蛋"}, Category: "vegetable_dish"},
+		},
+	}
+	candidates := []DiscoveryCandidate{{
+		ID: "c", Name: "番茄炒蛋",
+		Profile:  Profile{Ingredients: []string{"鸡蛋"}, Category: "vegetable_dish"},
+		Occasion: OccasionAny,
+	}}
+	got := ScoreDiscovery(candidates, refs, 12)
+	if len(got) != 1 {
+		t.Fatalf("len = %d", len(got))
+	}
+	if got[0].ReferenceName != "夯参照" {
+		t.Errorf("picked %q, want 夯参照", got[0].ReferenceName)
+	}
+	// 相似度 5+1=6 × 夯 2.0 = 12（人上人仅 3）
+	if math.Abs(got[0].Weight-12) > 1e-9 {
+		t.Errorf("weight = %v, want 12", got[0].Weight)
+	}
+}
+
+func TestScoreDiscoveryEmptyReferences(t *testing.T) {
+	got := ScoreDiscovery([]DiscoveryCandidate{{
+		ID: "c", Name: "x", Profile: Profile{Ingredients: []string{"a"}}, Occasion: OccasionAny,
+	}}, nil, 12)
+	if got != nil {
+		t.Fatalf("want nil, got %#v", got)
+	}
+}
