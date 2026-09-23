@@ -119,3 +119,27 @@ _Avoid_: Ban, dislike (dislike might be soft; rejection mark is hard)
 **Discovery pressure**:
 A dynamic signal (from small pool size, high recent rerolls, few cooldown-eligible pool dishes, etc.) that raises the chance the next decision is a discovery rather than a pool pick. Not a fixed calendar interval.
 _Avoid_: Schedule, quota, weekly slot
+
+**System One (Jev)**:
+TypeSafe's cloud decision API that answers typed Choice / Score / Noul questions over a shared state. Product speech may say Jev; formal docs say System One. Not a chat LLM and not free-form Chinese generation.
+_Avoid_: Taste interview / NIM onboarding (abolished, ADR-0023), chat model, recommendation engine that invents dishes
+
+**Shortlist**:
+The finite set of eligible dishes the knowing-me engine prepares for one reveal so System One Choice can pick among them. Not the Decision itself.
+_Avoid_: Decision, candidate pool (pool is the eater's full editable set), recommendation list shown to the eater
+
+**Explore slot**:
+Reserved seats inside a Shortlist held for high-freshness or Discovery dishes so anti-island exploration cannot be crowded out by familiar pool hits.
+_Avoid_: Discovery pressure (pressure raises chance; slots guarantee seats), surprise me, random filler
+
+**Meal intent**:
+Optional per-meal guidance the eater may give before a reveal: Chinese preset tags (stored as English enums in state) plus optional free text about what this meal should feel like.
+_Avoid_: Taste profile (dish identity), preference weight, permanent diet profile, interview answers
+
+**Local-only mode**:
+An explicit eater or deploy switch (default off) that allows reveals via the pure knowing-me path when System One is unavailable or intentionally unused.
+_Avoid_: Silent fallback when the key is missing (missing key without this switch is an error), offline mode as a vague synonym, zero-egress as always-on product default after opting into System One
+
+**Jev-composed decision**:
+A Decision produced by composing knowing-me Shortlist eligibility with System One final answers in the app, then presenting one dish with a locally templated Chinese reason. Local fallback after a ranking failure is still a Decision and must remain observable.
+_Avoid_: Treating System One Choice alone as the Decision without Go composition; letting System One compute cooldown or freshness arithmetic
